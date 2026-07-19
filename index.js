@@ -3,7 +3,8 @@ import { askYue } from './src/services/aiService.js';
 import { handleJoinCommand } from './src/commands/join.js'; 
 import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js'; 
-import { handleSetupCommand } from './src/commands/setup.js'; // Đường dẫn chuẩn theo file setup.js của ông
+import { handleSetupCommand } from './src/commands/setup.js';
+import { handleListenCommand } from './src/commands/listen.js';
 import 'dotenv/config';
 
 import ffmpegpath from 'ffmpeg-static';
@@ -42,6 +43,10 @@ client.on('messageCreate', async (message) => {
 
     if (command === '!join') {
         return await handleJoinCommand(message);
+    }
+
+    if (command === '!listen') { 
+        return await handleListenCommand(message);
     }
     
     if (command === '!out') { 

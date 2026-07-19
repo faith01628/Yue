@@ -29,20 +29,41 @@ function createWavHeader(dataLength) {
 // 🌐 ĐA LUỒNG: Mỗi user có một cờ khóa riêng, không ai chặn ai
 const activeStreams = new Map();
 
+// 🎯 DANH SÁCH USER ĐƯỢC PHÉP TRÒ CHUYỆN (Lưu ID và Username)
+const allowedUsers = new Map();
+
+/**
+ * Hàm đăng ký thêm người dùng vào danh sách lắng nghe
+ */
+export function registerSpeaker(userId, username) {
+    if (!allowedUsers.has(userId)) {
+        allowedUsers.set(userId, username);
+        console.log(`🔑 [QUYỀN] Đã cấp quyền lắng nghe cho: ${username} (${userId})`);
+        return true; // Đăng ký mới thành công
+    }
+    return false; // Đã có quyền từ trước
+}
+
 export function listenToUser(connection, userId, username, player, textChannel) {
     const receiver = connection.receiver;
 
+    // Tự động cấp quyền cho người gọi lệnh !join đầu tiên
+    registerSpeaker(userId, username);
+
     receiver.speaking.on('start', (uid) => {
-        if (uid !== userId) return;
+        // Chỉ xử lý nếu UID này nằm trong danh sách đã dùng lệnh (join hoặc listen)
+        if (!allowedUsers.has(uid)) return;
 
         // Nếu user này đang bận gửi API lượt trước thì bỏ qua lượt nhấp nháy mới
-        if (activeStreams.get(userId)) return;
+        if (activeStreams.get(uid)) return;
 
-        activeStreams.set(userId, true);
+        activeStreams.set(uid, true);
 
-        console.log(`\n[DEBUG 1] 🎙️ Phát hiện ${username} bắt đầu nói chuyện...`);
+        const currentUsername = allowedUsers.get(uid) || username;
 
-        const audioStream = receiver.subscribe(userId, {
+        console.log(`\n[DEBUG 1] 🎙️ Phát hiện ${currentUsername} bắt đầu nói chuyện...`);
+
+        const audioStream = receiver.subscribe(uid, {
             end: {
                 behavior: EndBehaviorType.AfterSilence,
                 duration: 1200, // Im lặng 1.2s là chốt câu gửi đi ngay
@@ -52,8 +73,8 @@ export function listenToUser(connection, userId, username, player, textChannel) 
         const decoder = new prism.opus.Decoder({ rate: 16000, channels: 1, frameSize: 960 });
 
         decoder.on('error', (err) => {
-            console.log(`[DEBUG OPUS] Lỗi từ ${username}: ${err.message}`);
-            activeStreams.delete(userId);
+            console.log(`[DEBUG OPUS] Lỗi từ ${currentUsername}: ${err.message}`);
+            activeStreams.delete(uid);
         });
 
         const pcmStream = audioStream.pipe(decoder);
@@ -66,17 +87,17 @@ export function listenToUser(connection, userId, username, player, textChannel) 
         pcmStream.on('end', async () => {
             const finalAudioBuffer = Buffer.concat(audioBuffer);
 
-            console.log(`[DEBUG 2] 💾 Đã thu xong âm thanh của ${username}. Dung lượng: ${finalAudioBuffer.length} bytes`);
+            console.log(`[DEBUG 2] 💾 Đã thu xong âm thanh của ${currentUsername}. Dung lượng: ${finalAudioBuffer.length} bytes`);
 
             // Giữ mức chặn 25KB để loại bỏ tiếng thở/nhiễu mic nhỏ
             if (finalAudioBuffer.length < 25000) {
                 console.log(`[DEBUG 2.5] 🤫 Đoạn âm thanh quá ngắn (${finalAudioBuffer.length} bytes), bỏ qua.`);
-                activeStreams.delete(userId);
+                activeStreams.delete(uid);
                 return;
             }
 
             try {
-                console.log(`[DEBUG 3] 🌐 Đang gửi câu nói lên Wit.ai...`);
+                console.log(`[DEBUG 3] 🌐 Đang gửi câu nói của ${currentUsername} lên Wit.ai...`);
 
                 const wavHeader = createWavHeader(finalAudioBuffer.length);
                 const wavBuffer = Buffer.concat([wavHeader, finalAudioBuffer]);
@@ -128,10 +149,10 @@ export function listenToUser(connection, userId, username, player, textChannel) 
                     }
                 }
 
-                console.log(`[DEBUG 4] 🗣️ Wit.ai dịch ra chữ từ ${username}: "${resultText || "KHÔNG DỊCH ĐƯỢC CHỮ NÀO"}"`);
+                console.log(`[DEBUG 4] 🗣️ Wit.ai dịch ra chữ từ ${currentUsername}: "${resultText || "KHÔNG DỊCH ĐƯỢC CHỮ NÀO"}"`);
 
                 if (!resultText || resultText.trim() === "") {
-                    activeStreams.delete(userId);
+                    activeStreams.delete(uid);
                     return;
                 }
 
@@ -142,24 +163,24 @@ export function listenToUser(connection, userId, username, player, textChannel) 
 
                 if (!hasWakeWord) {
                     console.log(`[DEBUG 5] ℹ️ Không chứa từ khóa gọi Bot.`);
-                    activeStreams.delete(userId);
+                    activeStreams.delete(uid);
                     return;
                 }
 
-                console.log(`[DEBUG 6] 🔥 Khớp từ khóa! Đang gọi Gemini...`);
+                console.log(`[DEBUG 6] 🔥 Khớp từ khóa! Đang gọi Gemini cho ${currentUsername}...`);
 
                 const textFromWit = resultText;
 
                 const mockMessageContext = {
                     id: 'voice-msg-' + Date.now(),
                     channel: textChannel,
-                    author: { id: userId, bot: false },
-                    member: { displayName: username },
+                    author: { id: uid, bot: false },
+                    member: { displayName: currentUsername },
                     content: textFromWit,
                     reply: async (content) => await textChannel.send(content)
                 };
 
-                const aiResponse = await askYue(userId, username, textFromWit, mockMessageContext, true);
+                const aiResponse = await askYue(uid, currentUsername, textFromWit, mockMessageContext, true);
 
                 const voiceUrl = getVoiceUrl(aiResponse);
                 if (voiceUrl) {
@@ -172,7 +193,7 @@ export function listenToUser(connection, userId, username, player, textChannel) 
                 console.error("❌ Lỗi chi tiết tại STT Wit.ai:", error.message);
             } finally {
                 // 🔓 Xả cờ để user tiếp tục nói câu tiếp theo
-                activeStreams.delete(userId);
+                activeStreams.delete(uid);
             }
         });
     });
