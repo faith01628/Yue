@@ -42,7 +42,7 @@ export async function handleJoinCommand(message) {
         const username = message.author.username;
 
         // 4. Kích hoạt tính năng "màng nhĩ" lắng nghe riêng bạn trong phòng thoại
-        listenToUser(connection, userId, username, player);
+        listenToUser(connection, userId, username, player, message.channel);
 
     } catch (error) {
         console.error("❌ Lỗi khi kết nối phòng Voice:", error);

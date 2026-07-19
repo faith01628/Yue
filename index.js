@@ -1,9 +1,9 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { askYue } from './src/services/aiService.js';
+import { askYue } from './src/services/aiService.js'; 
 import { handleJoinCommand } from './src/commands/join.js'; 
 import { handleLeaveCommand } from './src/commands/leave.js';
-import { handleInfoCommand } from './src/commands/info.js';
-import { handleSetupCommand } from './src/commands/setup.js';
+import { handleInfoCommand } from './src/commands/info.js'; 
+import { handleSetupCommand } from './src/commands/setup.js'; // Đường dẫn chuẩn theo file setup.js của ông
 import 'dotenv/config';
 
 import ffmpegpath from 'ffmpeg-static';
@@ -30,7 +30,7 @@ client.on('messageCreate', async (message) => {
     const command = message.content.trim();
 
     // ==========================================================
-    // ĐIỀU HƯỚNG LỆNH (COMMAND ROUTING) - SẠCH SẼ, RÕ RÀNG
+    // ĐIỀU HƯỚNG LỆNH (COMMAND ROUTING)
     // ==========================================================
     if (command === '!infoyue') {
         return await handleInfoCommand(message);
@@ -48,13 +48,15 @@ client.on('messageCreate', async (message) => {
         return await handleLeaveCommand(message);
     }
 
-    // --- XỬ LÝ CHAT TEXT CÓ BỘ LỌC TINH TẾ ---
+    // ==========================================================
+    // XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
+    // ==========================================================
     const isMentioned = message.mentions.has(client.user);
     const isSpecialChannel = message.channel.name === 'con-vợ-ai';
 
     if (isMentioned || isSpecialChannel) {
         try {
-            // Bộ lọc chặn Reply dạo của Bot
+            // Bộ lọc chặn tin nhắn Reply dạo của Bot
             if (message.reference && message.reference.messageId) {
                 const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                 if (repliedMessage.author.id !== client.user.id) {
@@ -64,13 +66,29 @@ client.on('messageCreate', async (message) => {
 
             await message.channel.sendTyping();
 
+            // Lọc bỏ tag Bot ra khỏi nội dung chữ
             let userPrompt = message.content.replace(`<@!${client.user.id}>`, '').replace(`<@${client.user.id}>`, '').trim();
-            if (!userPrompt) return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
+            
+            // --- 🛠️ LOGIC ĐÁNH CHẶN HÌNH ẢNH / GIF / LINK ---
+            const hasAttachments = message.attachments.size > 0;
+            const hasEmbeds = message.embeds.length > 0;
+
+            if (!userPrompt) {
+                if (hasAttachments || hasEmbeds) {
+                    // Nếu gửi ảnh/link trống không gõ chữ, gán text ẩn để ép gửi lên Gemini xử lý theo systemPrompt
+                    userPrompt = "[Gửi một tệp đính kèm/hình ảnh/video/link]";
+                } else {
+                    // Nếu thực sự không gửi gì cả (chỉ tag khơi khơi)
+                    return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
+                }
+            }
+            // ------------------------------------------------
 
             const userId = message.author.id;
             const username = message.member?.displayName || message.author.username; 
 
-            const aiResponse = await askYue(userId, username, userPrompt);
+            // Gửi dữ liệu lên hệ thống đa não (hàm askYue)
+            const aiResponse = await askYue(userId, username, userPrompt, message); 
             await message.reply(aiResponse);
 
         } catch (error) {

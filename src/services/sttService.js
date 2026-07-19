@@ -26,25 +26,34 @@ function createWavHeader(dataLength) {
     return buffer;
 }
 
-export function listenToUser(connection, userId, username, player) {
+// 🌐 ĐA LUỒNG: Mỗi user có một cờ khóa riêng, không ai chặn ai
+const activeStreams = new Map();
+
+export function listenToUser(connection, userId, username, player, textChannel) {
     const receiver = connection.receiver;
 
     receiver.speaking.on('start', (uid) => {
-        if (uid !== userId) return; 
+        if (uid !== userId) return;
+
+        // Nếu user này đang bận gửi API lượt trước thì bỏ qua lượt nhấp nháy mới
+        if (activeStreams.get(userId)) return;
+
+        activeStreams.set(userId, true);
 
         console.log(`\n[DEBUG 1] 🎙️ Phát hiện ${username} bắt đầu nói chuyện...`);
 
         const audioStream = receiver.subscribe(userId, {
             end: {
                 behavior: EndBehaviorType.AfterSilence,
-                duration: 2500, // 👈 ĐÃ TĂNG LÊN 2.5 GIÂY: Chờ bạn nói hết câu, tránh bị ngắt vụn luồng
+                duration: 1200, // Im lặng 1.2s là chốt câu gửi đi ngay
             },
         });
 
         const decoder = new prism.opus.Decoder({ rate: 16000, channels: 1, frameSize: 960 });
 
         decoder.on('error', (err) => {
-            console.log(`[DEBUG OPUS] Đã chặn một gói tin lỗi: ${err.message}`);
+            console.log(`[DEBUG OPUS] Lỗi từ ${username}: ${err.message}`);
+            activeStreams.delete(userId);
         });
 
         const pcmStream = audioStream.pipe(decoder);
@@ -56,21 +65,21 @@ export function listenToUser(connection, userId, username, player) {
 
         pcmStream.on('end', async () => {
             const finalAudioBuffer = Buffer.concat(audioBuffer);
-            
-            console.log(`[DEBUG 2] 💾 Đã thu xong âm thanh thô. Kích thước: ${finalAudioBuffer.length} bytes`);
 
-            // 👈 TĂNG LÊN 40000 BYTES: Bỏ qua hẳn mấy cục âm thanh vụn vài KB để đỡ spam API
-            if (finalAudioBuffer.length < 40000) {
-                console.log(`[DEBUG 2.5] 🤫 Đoạn âm thanh quá ngắn (${finalAudioBuffer.length} bytes), bỏ qua không gửi.`);
+            console.log(`[DEBUG 2] 💾 Đã thu xong âm thanh của ${username}. Dung lượng: ${finalAudioBuffer.length} bytes`);
+
+            // Giữ mức chặn 25KB để loại bỏ tiếng thở/nhiễu mic nhỏ
+            if (finalAudioBuffer.length < 25000) {
+                console.log(`[DEBUG 2.5] 🤫 Đoạn âm thanh quá ngắn (${finalAudioBuffer.length} bytes), bỏ qua.`);
+                activeStreams.delete(userId);
                 return;
             }
 
             try {
-                console.log(`[DEBUG 3] 🌐 Đang gửi câu nói hoàn chỉnh lên Wit.ai...`);
-                
+                console.log(`[DEBUG 3] 🌐 Đang gửi câu nói lên Wit.ai...`);
+
                 const wavHeader = createWavHeader(finalAudioBuffer.length);
                 const wavBuffer = Buffer.concat([wavHeader, finalAudioBuffer]);
-                
 
                 const response = await axios.post(
                     'https://api.wit.ai/speech',
@@ -80,47 +89,34 @@ export function listenToUser(connection, userId, username, player) {
                             'Authorization': `Bearer ${process.env.WIT_AI_TOKEN}`,
                             'Content-Type': 'audio/wav'
                         },
-                        responseType: 'text', 
+                        responseType: 'text',
                         maxContentLength: Infinity,
                         maxBodyLength: Infinity
                     }
                 );
 
-                // ==========================================================
-                // BỘ QUÉT TÌM CHỮ SIÊU BẠO LỰC (DÀNH CHO 187 DÒNG DATA)
-                // ==========================================================
                 let resultText = "";
                 const rawData = response.data;
 
                 if (typeof rawData === 'string') {
-                    // Cắt thành các dòng
                     const lines = rawData.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
-                    
+
                     console.log(`[DEBUG NDJSON] Tổng số dòng nhận về từ Wit.ai: ${lines.length}`);
 
-                    // CHƠI CHIÊU: Ép kiểu tìm kiếm chuỗi thẳng vào văn bản thô, không sợ sai cấu trúc JSON
-                    // Thằng Wit.ai kiểu gì dòng cuối cũng có dạng: ... "text": "câu bạn nói" ...
                     for (let i = lines.length - 1; i >= 0; i--) {
                         try {
                             const parsed = JSON.parse(lines[i]);
-                            
-                            // Cách 1: Nếu nó nằm trong parsed.text thông thường
                             if (parsed.text && parsed.text.trim() !== "") {
                                 resultText = parsed.text;
                                 break;
                             }
-                            
-                            // Cách 2: Phòng hờ Wit.ai đổi cấu trúc sang parsed.speech.text hoặc cấu trúc khác
                             if (parsed.speech?.text) {
                                 resultText = parsed.speech.text;
                                 break;
                             }
-                        } catch (e) {
-                            // Nếu dòng bị lỗi cú pháp, quét tiếp dòng khác
-                        }
+                        } catch (e) { }
                     }
 
-                    // TÌM KIẾM ĐƯỜNG CÙNG: Nếu duyệt JSON vẫn hụt, dùng Regex móc chữ trực tiếp từ dòng cuối cùng
                     if (!resultText) {
                         const lastLineWithText = lines.reverse().find(line => line.includes('"text":'));
                         if (lastLineWithText) {
@@ -132,25 +128,38 @@ export function listenToUser(connection, userId, username, player) {
                     }
                 }
 
-                console.log(`[DEBUG 4] 🗣️ Wit.ai dịch ra chữ: "${resultText || "KHÔNG DỊCH ĐƯỢC CHỮ NÀO"}"`);
+                console.log(`[DEBUG 4] 🗣️ Wit.ai dịch ra chữ từ ${username}: "${resultText || "KHÔNG DỊCH ĐƯỢC CHỮ NÀO"}"`);
 
                 if (!resultText || resultText.trim() === "") {
+                    activeStreams.delete(userId);
                     return;
                 }
 
-                // --- BỘ LỌC TỪ KHÓA ---
+                // ⚡ BỘ TỪ KHÓA MỚI DỄ BẮT ÂM
                 const lowerText = resultText.toLowerCase();
-                const wakeWords = ['Yue', 'vợ', 'ai đi', 'ai ri', 'hai ri', 'ơi', 'alo', 'a lô'];
+                const wakeWords = ["yue", "nguyệt", "nguyệt ơi", "ê nguyệt", "vợ", "vợ ơi", "à nguyệt", "chị nguyệt", "chị nguyệt ơi"];
                 const hasWakeWord = wakeWords.some(word => lowerText.includes(word));
 
                 if (!hasWakeWord) {
                     console.log(`[DEBUG 5] ℹ️ Không chứa từ khóa gọi Bot.`);
+                    activeStreams.delete(userId);
                     return;
                 }
 
                 console.log(`[DEBUG 6] 🔥 Khớp từ khóa! Đang gọi Gemini...`);
-                const aiResponse = await askYue(userId, username, resultText);
-                console.log(`🤖 Yue trả lời: "${aiResponse}"`);
+
+                const textFromWit = resultText;
+
+                const mockMessageContext = {
+                    id: 'voice-msg-' + Date.now(),
+                    channel: textChannel,
+                    author: { id: userId, bot: false },
+                    member: { displayName: username },
+                    content: textFromWit,
+                    reply: async (content) => await textChannel.send(content)
+                };
+
+                const aiResponse = await askYue(userId, username, textFromWit, mockMessageContext, true);
 
                 const voiceUrl = getVoiceUrl(aiResponse);
                 if (voiceUrl) {
@@ -161,6 +170,9 @@ export function listenToUser(connection, userId, username, player) {
 
             } catch (error) {
                 console.error("❌ Lỗi chi tiết tại STT Wit.ai:", error.message);
+            } finally {
+                // 🔓 Xả cờ để user tiếp tục nói câu tiếp theo
+                activeStreams.delete(userId);
             }
         });
     });
