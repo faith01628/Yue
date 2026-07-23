@@ -5,6 +5,13 @@ import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js'; 
 import { handleSetupCommand } from './src/commands/setup.js';
 import { handleListenCommand } from './src/commands/listen.js';
+import { 
+    handleOsuProfileCommand, 
+    handleOsuRecentCommand, 
+    handleOsuTopCommand, 
+    handleOsuWhatIfCommand,
+    handleOsuRenderCommand
+} from './src/commands/osu.js';
 import 'dotenv/config';
 
 import ffmpegpath from 'ffmpeg-static';
@@ -28,10 +35,18 @@ client.once('clientReady', () => {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    // ==========================================================
+    // ⚡ BẮT TỰ ĐỘNG FILE REPLAY (.OSR) KHÔNG CẦN LỆNH
+    // ==========================================================
+    const hasOsrFile = message.attachments.some(file => file.name && file.name.endsWith('.osr'));
+    if (hasOsrFile) {
+        return await handleOsuRenderCommand(message);
+    }
+
     const command = message.content.trim();
 
     // ==========================================================
-    // ĐIỀU HƯỚNG LỆNH (COMMAND ROUTING)
+    // ĐIỀU HƯỚNG LỆNH PREFIX (COMMAND ROUTING)
     // ==========================================================
     if (command === '!infoyue') {
         return await handleInfoCommand(message);
@@ -53,6 +68,27 @@ client.on('messageCreate', async (message) => {
         return await handleLeaveCommand(message);
     }
 
+    // --- CÁC LỆNH OSU! ---
+    if (command.startsWith('!osu') || command.startsWith('!profile')) {
+        return await handleOsuProfileCommand(message);
+    }
+
+    if (command.startsWith('!rs') || command.startsWith('!recent')) {
+        return await handleOsuRecentCommand(message);
+    }
+
+    if (command.startsWith('!top') || command.startsWith('!t')) {
+        return await handleOsuTopCommand(message);
+    }
+
+    if (command.startsWith('!wi') || command.startsWith('!whatif')) {
+        return await handleOsuWhatIfCommand(message);
+    }
+
+    if (command.startsWith('!render') || command.startsWith('!ordr')) {
+        return await handleOsuRenderCommand(message);
+    }
+
     // ==========================================================
     // XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
     // ==========================================================
@@ -61,7 +97,6 @@ client.on('messageCreate', async (message) => {
 
     if (isMentioned || isSpecialChannel) {
         try {
-            // Bộ lọc chặn tin nhắn Reply dạo của Bot
             if (message.reference && message.reference.messageId) {
                 const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                 if (repliedMessage.author.id !== client.user.id) {
@@ -71,28 +106,22 @@ client.on('messageCreate', async (message) => {
 
             await message.channel.sendTyping();
 
-            // Lọc bỏ tag Bot ra khỏi nội dung chữ
             let userPrompt = message.content.replace(`<@!${client.user.id}>`, '').replace(`<@${client.user.id}>`, '').trim();
             
-            // --- 🛠️ LOGIC ĐÁNH CHẶN HÌNH ẢNH / GIF / LINK ---
             const hasAttachments = message.attachments.size > 0;
             const hasEmbeds = message.embeds.length > 0;
 
             if (!userPrompt) {
                 if (hasAttachments || hasEmbeds) {
-                    // Nếu gửi ảnh/link trống không gõ chữ, gán text ẩn để ép gửi lên Gemini xử lý theo systemPrompt
                     userPrompt = "[Gửi một tệp đính kèm/hình ảnh/video/link]";
                 } else {
-                    // Nếu thực sự không gửi gì cả (chỉ tag khơi khơi)
                     return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
                 }
             }
-            // ------------------------------------------------
 
             const userId = message.author.id;
             const username = message.member?.displayName || message.author.username; 
 
-            // Gửi dữ liệu lên hệ thống đa não (hàm askYue)
             const aiResponse = await askYue(userId, username, userPrompt, message); 
             await message.reply(aiResponse);
 
