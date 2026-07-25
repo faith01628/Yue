@@ -46,3 +46,35 @@ export function getLinkedOsuUsername(discordId) {
     const users = loadUsers();
     return users[discordId] || null;
 }
+
+/**
+ * Lấy recent score từ osu! API
+ */
+export async function getRecentScore(username) {
+    try {
+        const apiKey = process.env.OSU_API_KEY;
+        if (!apiKey) return null;
+
+        const url = `https://osu.ppy.sh/api/get_user_recent?k=${apiKey}&u=${encodeURIComponent(username)}&limit=1`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data || data.length === 0) return null;
+
+        const recent = data[0];
+        return {
+            beatmapTitle: `Beatmap #${recent.beatmap_id}`,
+            rank: recent.rank,
+            score: parseInt(recent.score),
+            pp: recent.pp ? parseFloat(recent.pp) : 0,
+            maxcombo: parseInt(recent.maxcombo),
+            beatmapMaxCombo: null,
+            statistics: {
+                countmiss: parseInt(recent.countmiss)
+            }
+        };
+    } catch (err) {
+        console.error('Lỗi lấy recent score:', err);
+        return null;
+    }
+}

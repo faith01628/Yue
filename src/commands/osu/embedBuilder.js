@@ -38,8 +38,8 @@ export async function buildDetailedScoreEmbed(user, score, beatmap, beatmapset, 
     const isChoked = countMiss > 0 || (realMaxCombo > 0 && score.max_combo < realMaxCombo * 0.98);
 
     let ppDisplay = (isChoked && ifFcPp > currentPp)
-        ? `pp ▸ **${currentPp}** / **${ifFcPp}** (if FC **${fcAccStr}%**)`
-        : `pp ▸ **${currentPp}**`;
+        ? `PP ▸ **${currentPp}** / **${ifFcPp}** (if FC **${fcAccStr}%**)`
+        : `PP ▸ **${currentPp}**`;
 
     const comboDisplay = realMaxCombo > 0 ? `**${score.max_combo}**/${realMaxCombo}x` : `**${score.max_combo}x**`;
     const star = beatmap.difficulty_rating ? beatmap.difficulty_rating.toFixed(2) : '?.??';

@@ -6,7 +6,6 @@ const apiKeys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(
 let currentKeyIndex = 0; // Biến đếm để luân chuyển key
 
 const aiModel = "gemini-3.1-flash-lite";
-// const aiModel = "gemini-2.0-flash";
 
 const baseSystemPrompt = `Bạn là Yue (tên tiếng Việt là Nguyệt, nhưng luôn tự xưng là Yue), một nữ game thủ ảo và là bạn đồng hành tinh nghịch trong server Discord.
 
@@ -35,22 +34,27 @@ const baseSystemPrompt = `Bạn là Yue (tên tiếng Việt là Nguyệt, nhưn
  * Hàm lấy API Key tiếp theo trong danh sách (Xoay tua vòng tròn)
  * Tự động chèn chỉ thị ngữ cảnh Voice / Text dựa vào tham số isVoice
  */
-function getNextAIInstance(isVoice = false) {
+function getNextAIInstance(isVoice = false, isIngame = false) {
     if (apiKeys.length === 0) {
         throw new Error("Chưa cấu hình GEMINI_API_KEYS trong file .env cha nội ơi!");
     }
     const key = apiKeys[currentKeyIndex];
     currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
     
-    // ⚡ CHỈ THỊ NGỮ CẢNH ĐỘNG DÀNH CHO VOICE VÀ TEXT
+    // ⚡ CHỈ THỊ NGỮ CẢNH ĐỘNG DÀNH CHO VOICE / IN-GAME IRC / DISCORD TEXT
     let dynamicInstruction = "";
     if (isVoice) {
         dynamicInstruction = `\n\n[ĐANG TRONG PHÒNG VOICE CHAT]:
 - BẮT BỘC trả lời cực kỳ ngắn gọn (CHỈ TỪ 1 ĐẾN 2 CÂU).
 - Dùng khẩu ngữ giao tiếp tự nhiên.
 - TUYỆT ĐỐI KHÔNG dùng emoji, icon, ký tự đặc biệt hay định dạng Markdown (như bold, italic, spoiler, codeblock) vì bộ đọc TTS sẽ không đọc được!`;
+    } else if (isIngame) {
+        dynamicInstruction = `\n\n[ĐANG TRONG PHÒNG MULTIPLAYER IN-GAME OSU!]:
+- Trả lời CỰC KỲ NGẮN GỌN (dưới 130 ký tự).
+- KHÔNG sử dụng các định dạng Markdown như **in đậm**, *in nghiêng*, codeblock hay xuống dòng.
+- Vẫn giữ nguyên tính cách tinh nghịch, tấu hài.`;
     } else {
-        dynamicInstruction = `\n\n[ĐANG TRONG KÊNH CHAT TEXT]:
+        dynamicInstruction = `\n\n[ĐANG TRONG KÊNH CHAT TEXT DISCORD]:
 - Trả lời ngắn gọn, tự nhiên, rành mạch chuẩn người thật chat Discord.
 - QUY TẮC NGUYÊN BẢN (TRÁNH LẠM DỤNG FORMATTING):
   + HÃY CHAT CHỮ THƯỜNG LÀ CHÍNH. 90% câu thoại nên là văn bản bình thường.
@@ -66,43 +70,49 @@ function getNextAIInstance(isVoice = false) {
     return ai.getGenerativeModel({ model: aiModel, systemInstruction: fullPrompt });
 }
 
-export async function askYue(userId, username, userPrompt, messageContext, isVoice = false) {
+export async function askYue(userId, username, userPrompt, messageContext = null, isVoice = false) {
     try {
         let formattedHistory = [];
+        const isIngame = !messageContext?.channel; // Nếu không có channel -> Là luồng Ingame IRC
 
-        // ⚡ NẾU LÀ LUỒNG VOICE: Bỏ qua hoàn toàn việc cào kênh chat Discord để tăng tốc tối đa
-        if (isVoice) {
+        // ⚡ NẾU LÀ LUỒNG VOICE HOẶC IN-GAME IRC: Bỏ qua việc cào tin nhắn Discord cũ
+        if (isVoice || isIngame) {
             formattedHistory = [];
-        } else {
-            // LÀ LUỒNG CHAT: Vẫn cào 10 tin nhắn cũ như bình thường để giữ mạch hội thoại
-            const rawMessages = await messageContext.channel.messages.fetch({ limit: 10 });
-            const sortedMessages = Array.from(rawMessages.values()).reverse();
+        } else if (messageContext?.channel?.messages) {
+            // LÀ LUỒNG CHAT DISCORD: Cào 10 tin nhắn cũ an toàn
+            try {
+                const rawMessages = await messageContext.channel.messages.fetch({ limit: 10 });
+                const sortedMessages = Array.from(rawMessages.values()).reverse();
 
-            for (const msg of sortedMessages) {
-                if (msg.id === messageContext.id || msg.content.startsWith('!')) continue;
+                for (const msg of sortedMessages) {
+                    if (msg.id === messageContext.id || msg.content.startsWith('!')) continue;
 
-                if (msg.author.bot) {
-                    formattedHistory.push({
-                        role: 'model',
-                        parts: [{ text: msg.content }]
-                    });
-                } else {
-                    const authorName = msg.member?.displayName || msg.author.username;
-                    formattedHistory.push({
-                        role: 'user',
-                        parts: [{ text: `[${authorName}]: ${msg.content}` }]
-                    });
+                    if (msg.author.bot) {
+                        formattedHistory.push({
+                            role: 'model',
+                            parts: [{ text: msg.content }]
+                        });
+                    } else {
+                        const authorName = msg.member?.displayName || msg.author.username;
+                        formattedHistory.push({
+                            role: 'user',
+                            parts: [{ text: `[${authorName}]: ${msg.content}` }]
+                        });
+                    }
                 }
-            }
 
-            // Đảm bảo tin nhắn đầu tiên phải là 'user' để tránh lỗi hệ thống
-            while (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
-                formattedHistory.shift();
+                // Đảm bảo tin nhắn đầu tiên trong history phải là 'user'
+                while (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
+                    formattedHistory.shift();
+                }
+            } catch (fetchErr) {
+                console.error("⚠️ Không thể lấy history tin nhắn cũ:", fetchErr.message);
+                formattedHistory = [];
             }
         }
 
-        // Xoay tua đổi não và khởi tạo model với ngữ cảnh Voice/Text chính xác
-        const model = getNextAIInstance(isVoice);
+        // Khởi tạo model với chỉ thị phù hợp (Voice / In-Game / Discord Text)
+        const model = getNextAIInstance(isVoice, isIngame);
 
         const chat = model.startChat({
             history: formattedHistory,
@@ -112,7 +122,14 @@ export async function askYue(userId, username, userPrompt, messageContext, isVoi
         const currentMessageWithContext = `[${username}]: ${userPrompt}`;
         
         const result = await chat.sendMessage(currentMessageWithContext);
-        return result.response.text();
+        let responseText = result.response.text();
+
+        // Xử lý làm sạch thêm nếu là luồng in-game (xóa xuống dòng)
+        if (isIngame) {
+            responseText = responseText.replace(/[\r\n]+/g, ' ').trim();
+        }
+
+        return responseText;
 
     } catch (error) {
         console.error("❌ Lỗi hệ thống đa brain (AI Service):", error.message);

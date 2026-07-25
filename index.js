@@ -5,6 +5,10 @@ import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js';
 import { handleSetupCommand } from './src/commands/setup.js';
 import { handleListenCommand } from './src/commands/listen.js';
+import { handleMakeRoomCommand } from './src/commands/osu/makeRoomCommand.js';
+import { handleInviteCommand } from './src/commands/osu/inviteCommand.js';
+import { handleCloseMatchCommand } from './src/commands/osu/closeMatchCommand.js';
+
 import {
     handleOsuProfileCommand,
     handleOsuRecentCommand,
@@ -16,7 +20,7 @@ import {
     handleOsuNoChokeCommand,
     handleOsuCalcPPCommand,
     handleOsuLinkSlashCommand
-} from './src/commands/osu/index.js'; // 👈 Trỏ thẳng tới file index.js này là chuẩn đét!
+} from './src/commands/osu/index.js';
 import 'dotenv/config';
 
 import ffmpegpath from 'ffmpeg-static';
@@ -37,12 +41,11 @@ const client = new Client({
 client.once('clientReady', () => {
     console.log(`\n🤖 Yue AI đã sẵn sàng hoạt động!`);
     console.log(`💬 Chat text tại kênh "con-vợ-ai"`);
-    console.log(`🎙️ Gõ lệnh "!join" khi đang ở trong phòng thoại để trò chuyện trực tiếp.\n`);
+    console.log(`🎙️ Gõ lệnh ".join" khi đang ở trong phòng thoại để trò chuyện trực tiếp.\n`);
 });
 
 // ==========================================================
 // ⚡ 2. XỬ LÝ SLASH COMMANDS (/link...)
-// 🎯 ĐẶT ĐỘC LẬP BÊN NGOÀI ĐỂ KHÔNG BỊ TRÙNG LISTENER & KHÔNG LO BUG
 // ==========================================================
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
@@ -86,15 +89,25 @@ client.on('messageCreate', async (message) => {
     if (content.startsWith('.top') || content.startsWith('.t')) {
         return await handleOsuTopCommand(message);
     }
-    if (content.startsWith('.wi') || content.startsWith('.whatif')) {   
+    if (content.startsWith('.wi') || content.startsWith('.whatif')) {
         return await handleOsuWhatIfCommand(message);
     }
-    if (content.startsWith('.c') || content.startsWith('.compare') || content === '.c') {
+
+    // 🎯 LỆNH ĐÓNG PHÒNG MULTI (Đưa lên trước .c để không bị nuốt lệnh)
+    if (content.startsWith('.matchclose') || content.startsWith('.close') || content.startsWith('.mc')) {
+        return await handleCloseMatchCommand(message);
+    }
+
+    // 🎯 Lệnh Compare (Dùng regex \b để chỉ bắt chữ .c đơn lẻ, không bắt .cm / .close)
+    if (content.startsWith('.compare') || content.match(/^\.c\b/i)) {
         return await handleOsuCompareCommand(message);
     }
-    if (content.startsWith('.map') || content.startsWith('.m')) {
+
+    // 🎯 Lệnh Beatmap (Dùng regex \b để không bắt .mr / .make-room)
+    if (content.startsWith('.map') || content.match(/^\.m\b/i)) {
         return await handleOsuMapCommand(message);
     }
+
     if (content.startsWith('.lb') || content.startsWith('.leaderboard')) {
         return await handleOsuLeaderboardCommand(message);
     }
@@ -103,6 +116,14 @@ client.on('messageCreate', async (message) => {
     }
     if (content.startsWith('.pp') || content.startsWith('.calc')) {
         return await handleOsuCalcPPCommand(message);
+    }
+
+    // 🎯 Lệnh Make Room & Invite
+    if (content.startsWith('.mr') || content.startsWith('.make-room') || content.startsWith('.lobby')) {
+        return await handleMakeRoomCommand(message);
+    }
+    if (content.startsWith('.invosu') || content.startsWith('.inv') || content.startsWith('.invite')) {
+        return await handleInviteCommand(message);
     }
 
     // ==========================================================
