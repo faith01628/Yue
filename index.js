@@ -1,17 +1,22 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { askYue } from './src/services/aiService.js'; 
-import { handleJoinCommand } from './src/commands/join.js'; 
+import { askYue } from './src/services/aiService.js';
+import { handleJoinCommand } from './src/commands/join.js';
 import { handleLeaveCommand } from './src/commands/leave.js';
-import { handleInfoCommand } from './src/commands/info.js'; 
+import { handleInfoCommand } from './src/commands/info.js';
 import { handleSetupCommand } from './src/commands/setup.js';
 import { handleListenCommand } from './src/commands/listen.js';
-import { 
-    handleOsuProfileCommand, 
-    handleOsuRecentCommand, 
-    handleOsuTopCommand, 
+import {
+    handleOsuProfileCommand,
+    handleOsuRecentCommand,
+    handleOsuTopCommand,
     handleOsuWhatIfCommand,
-    handleOsuRenderCommand
-} from './src/commands/osu.js';
+    handleOsuCompareCommand,
+    handleOsuMapCommand,
+    handleOsuLeaderboardCommand,
+    handleOsuNoChokeCommand,
+    handleOsuCalcPPCommand,
+    handleOsuLinkSlashCommand
+} from './src/commands/osu/index.js'; // 👈 Trỏ thẳng tới file index.js này là chuẩn đét!
 import 'dotenv/config';
 
 import ffmpegpath from 'ffmpeg-static';
@@ -21,76 +26,87 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent, 
-        GatewayIntentBits.GuildVoiceStates, 
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates,
     ]
 });
 
+// ==========================================================
+// ⚡ 1. EVENT CLIENT READY
+// ==========================================================
 client.once('clientReady', () => {
     console.log(`\n🤖 Yue AI đã sẵn sàng hoạt động!`);
     console.log(`💬 Chat text tại kênh "con-vợ-ai"`);
     console.log(`🎙️ Gõ lệnh "!join" khi đang ở trong phòng thoại để trò chuyện trực tiếp.\n`);
 });
 
+// ==========================================================
+// ⚡ 2. XỬ LÝ SLASH COMMANDS (/link...)
+// 🎯 ĐẶT ĐỘC LẬP BÊN NGOÀI ĐỂ KHÔNG BỊ TRÙNG LISTENER & KHÔNG LO BUG
+// ==========================================================
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    try {
+        if (interaction.commandName === 'link') {
+            await handleOsuLinkSlashCommand(interaction);
+        }
+    } catch (error) {
+        console.error('❌ Lỗi xử lý Interaction:', error);
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: 'Có lỗi xảy ra khi xử lý lệnh này rồi ông ơi!', ephemeral: true });
+        } else {
+            await interaction.reply({ content: 'Có lỗi xảy ra khi xử lý lệnh này rồi ông ơi!', ephemeral: true });
+        }
+    }
+});
+
+// ==========================================================
+// ⚡ 3. XỬ LÝ MESSAGE CREATE (LỆNH PREFIX & AI CHAT)
+// ==========================================================
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // ==========================================================
-    // ⚡ BẮT TỰ ĐỘNG FILE REPLAY (.OSR) KHÔNG CẦN LỆNH
-    // ==========================================================
-    const hasOsrFile = message.attachments.some(file => file.name && file.name.endsWith('.osr'));
-    if (hasOsrFile) {
-        return await handleOsuRenderCommand(message);
-    }
+    const content = message.content.trim();
 
-    const command = message.content.trim();
-
-    // ==========================================================
-    // ĐIỀU HƯỚNG LỆNH PREFIX (COMMAND ROUTING)
-    // ==========================================================
-    if (command === '!infoyue') {
-        return await handleInfoCommand(message);
-    }
-
-    if (command === '!setupyue') { 
-        return await handleSetupCommand(message);
-    }
-
-    if (command === '!join') {
-        return await handleJoinCommand(message);
-    }
-
-    if (command === '!listen') { 
-        return await handleListenCommand(message);
-    }
-    
-    if (command === '!out') { 
-        return await handleLeaveCommand(message);
-    }
+    // --- CÁC LỆNH HỆ THỐNG ---
+    if (content === '.infoyue') return await handleInfoCommand(message);
+    if (content === '.setupyue') return await handleSetupCommand(message);
+    if (content === '.join') return await handleJoinCommand(message);
+    if (content === '.listen') return await handleListenCommand(message);
+    if (content === '.out') return await handleLeaveCommand(message);
 
     // --- CÁC LỆNH OSU! ---
-    if (command.startsWith('!osu') || command.startsWith('!profile')) {
+    if (content.startsWith('.osu') || content.startsWith('.profile') || content.startsWith('.p')) {
         return await handleOsuProfileCommand(message);
     }
-
-    if (command.startsWith('!rs') || command.startsWith('!recent')) {
+    if (content.startsWith('.rs') || content.startsWith('.recent') || content.startsWith('.r')) {
         return await handleOsuRecentCommand(message);
     }
-
-    if (command.startsWith('!top') || command.startsWith('!t')) {
+    if (content.startsWith('.top') || content.startsWith('.t')) {
         return await handleOsuTopCommand(message);
     }
-
-    if (command.startsWith('!wi') || command.startsWith('!whatif')) {
+    if (content.startsWith('.wi') || content.startsWith('.whatif')) {   
         return await handleOsuWhatIfCommand(message);
     }
-
-    if (command.startsWith('!render') || command.startsWith('!ordr')) {
-        return await handleOsuRenderCommand(message);
+    if (content.startsWith('.c') || content.startsWith('.compare') || content === '.c') {
+        return await handleOsuCompareCommand(message);
+    }
+    if (content.startsWith('.map') || content.startsWith('.m')) {
+        return await handleOsuMapCommand(message);
+    }
+    if (content.startsWith('.lb') || content.startsWith('.leaderboard')) {
+        return await handleOsuLeaderboardCommand(message);
+    }
+    if (content.startsWith('.nc') || content.startsWith('.nochoke')) {
+        return await handleOsuNoChokeCommand(message);
+    }
+    if (content.startsWith('.pp') || content.startsWith('.calc')) {
+        return await handleOsuCalcPPCommand(message);
     }
 
     // ==========================================================
-    // XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
+    // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
     // ==========================================================
     const isMentioned = message.mentions.has(client.user);
     const isSpecialChannel = message.channel.name === 'con-vợ-ai';
@@ -100,14 +116,17 @@ client.on('messageCreate', async (message) => {
             if (message.reference && message.reference.messageId) {
                 const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                 if (repliedMessage.author.id !== client.user.id) {
-                    return; 
+                    return;
                 }
             }
 
             await message.channel.sendTyping();
 
-            let userPrompt = message.content.replace(`<@!${client.user.id}>`, '').replace(`<@${client.user.id}>`, '').trim();
-            
+            let userPrompt = message.content
+                .replace(`<@!${client.user.id}>`, '')
+                .replace(`<@${client.user.id}>`, '')
+                .trim();
+
             const hasAttachments = message.attachments.size > 0;
             const hasEmbeds = message.embeds.length > 0;
 
@@ -120,9 +139,9 @@ client.on('messageCreate', async (message) => {
             }
 
             const userId = message.author.id;
-            const username = message.member?.displayName || message.author.username; 
+            const username = message.member?.displayName || message.author.username;
 
-            const aiResponse = await askYue(userId, username, userPrompt, message); 
+            const aiResponse = await askYue(userId, username, userPrompt, message);
             await message.reply(aiResponse);
 
         } catch (error) {
