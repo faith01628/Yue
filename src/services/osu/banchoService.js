@@ -2,11 +2,9 @@ import banchojs from 'bancho.js';
 import { askYue } from '../aiService.js';
 
 // Import các handler lệnh in-game từ thư mục osuInGame
-import { handleHostCommands } from '../../commands/osuInGame/hostCommands.js';
-import { handleRefCommands } from '../../commands/osuInGame/refCommands.js';
-import { handleMapCommands } from '../../commands/osuInGame/mapCommands.js';
 import { handlePlayerCommands } from '../../commands/osuInGame/playerCommands.js';
 import { handleInGameHelp } from '../../commands/osuInGame/helpCommand.js';
+import { handleHostCommands } from '../../commands/osuInGame/hostCommands.js';
 
 const { BanchoClient } = banchojs;
 
@@ -25,6 +23,40 @@ export const activeLobbies = new Map();
 const channelCooldowns = new Map();
 const COOLDOWN_TIME_MS = 5000; // 5 giây Cooldown mỗi phòng
 
+/**
+ * Hàm hỗ trợ ép Bancho Client join lại một phòng Multiplayer cụ thể & gán sự kiện Auto Start
+ */
+export async function forceJoinLobby(matchId) {
+    try {
+        // Đảm bảo Bancho đã kết nối trước khi join
+        await initBancho();
+
+        const channelName = `#mp_${matchId}`;
+        const channel = bancho.getChannel(channelName);
+        
+        await channel.join();
+
+        // Lắng nghe sự kiện allPlayersReady trực tiếp từ object Lobby của bancho.js
+        const lobby = channel.lobby;
+        if (lobby) {
+            lobby.on("allPlayersReady", async () => {
+                console.log(`[AutoStart] Tất cả người chơi trong ${channelName} đã Ready!`);
+                await channel.sendMessage("YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...");
+                await channel.sendMessage("!mp start 10");
+            });
+        }
+
+        console.log(`✅ Đã ép Yue rejoin thành công vào ${channelName}`);
+        return true;
+    } catch (err) {
+        console.error(`❌ Lỗi khi force join ${matchId}:`, err);
+        return false;
+    }
+}
+
+/**
+ * Khởi tạo kết nối tới Bancho IRC (DUY NHẤT 1 HÀM)
+ */
 export async function initBancho() {
     if (isConnected) return bancho;
     try {
@@ -32,11 +64,14 @@ export async function initBancho() {
         isConnected = true;
         console.log('✅ Đã kết nối thành công tới osu! Bancho IRC!');
 
-        // ==========================================================
-        // ⚡ LẮNG NGHE CHAT TRONG CÁC KÊNH MULTIPLAYER IN-GAME (#mp_...)
-        // ==========================================================
+        // Lắng nghe chat phòng Multi
         bancho.on('PM', handleInGameChat);
         bancho.on('CM', handleInGameChat);
+
+        // 🔄 Tự động rejoin lại các phòng trong RAM (nếu có) khi restart bot
+        for (const [matchId] of activeLobbies.entries()) {
+            await forceJoinLobby(matchId);
+        }
 
     } catch (err) {
         console.error('❌ Lỗi kết nối Bancho IRC:', err);
@@ -45,7 +80,7 @@ export async function initBancho() {
 }
 
 /**
- * Xử lý duy nhất toàn bộ tin nhắn chat từ Bancho IRC trong phòng Multi #mp_...
+ * Xử lý tin nhắn chat từ Bancho IRC trong phòng Multi #mp_...
  */
 async function handleInGameChat(message) {
     const channel = message.channel;
@@ -59,18 +94,25 @@ async function handleInGameChat(message) {
     // 2. Bỏ qua tin nhắn do bot/Yue tự gửi ra
     if (content.startsWith('YUE:')) return;
 
+    // 🎯 3. BẮT SỰ KIỆN AUTO START TỪ TIN NHẮN CHAT BANCHOBOT (DỰ PHÒNG CHẮC CHẮN 100%)
+    if (senderUsername.toLowerCase() === 'banchobot') {
+        if (content.toLowerCase().includes('all players are ready')) {
+            await channel.sendMessage('YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...');
+            return await channel.sendMessage('!mp start 10');
+        }
+    }
+
     const args = content.split(/ +/);
     const command = args[0].toLowerCase();
     const commandArgs = args.slice(1);
 
-    // 🎯 1. Lệnh Help (.yue help / .help / !help)
+    // 🎯 Lệnh Help (.yue help / .help / !help)
     if (content.toLowerCase() === '.yue help' || command === '.help' || command === '!help') {
         return await handleInGameHelp(channel);
     }
 
-    // 🎯 2. Trò chuyện AI với Yue (.yue <câu hỏi> / !yue <câu hỏi>)
+    // 🎯 Trò chuyện AI với Yue (.yue <câu hỏi> / !yue <câu hỏi>)
     if (command === '.yue' || command === '!yue') {
-        // Kiểm tra Cooldown 5s riêng cho AI Chat để tránh ăn mute BanchoBot
         const now = Date.now();
         const lastUsed = channelCooldowns.get(channelName) || 0;
         if (now - lastUsed < COOLDOWN_TIME_MS) return;
@@ -93,21 +135,14 @@ async function handleInGameChat(message) {
         }
     }
 
-    // 🎯 3. Điều hướng các lệnh Quản Lý Multi In-Game
-    if (['.host', '!host', '.autohost', '.ah', '!autohost'].includes(command)) {
-        return await handleHostCommands(channel, message, commandArgs, command);
-    }
-
-    if (['.addref', '!addref', '.removeref', '.rmref', '!removeref'].includes(command)) {
-        return await handleRefCommands(channel, message, commandArgs, command);
-    }
-
-    if (['.abort', '!abort', '.time', '!time', '.timer', '.rnd', '.random'].includes(command)) {
-        return await handleMapCommands(channel, message, commandArgs, command);
-    }
-
-    if (['.kick', '!kick', '.stat', '!stat', '.rs', '!rs'].includes(command)) {
+    // 🎯 Lệnh tra cứu score gần nhất (.rs / !rs)
+    if (['.rs', '!rs'].includes(command)) {
         return await handlePlayerCommands(channel, message, commandArgs, command);
+    }
+
+    // 🎯 Lệnh Autohost (.ah / .autohost / .next / .skip)
+    if (['.ah', '!ah', '.autohost', '!autohost', '.next', '!next', '.skip', '!skip'].includes(command)) {
+        return await handleHostCommands(channel, message, commandArgs, command);
     }
 }
 

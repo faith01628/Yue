@@ -8,6 +8,7 @@ import { handleListenCommand } from './src/commands/listen.js';
 import { handleMakeRoomCommand } from './src/commands/osu/makeRoomCommand.js';
 import { handleInviteCommand } from './src/commands/osu/inviteCommand.js';
 import { handleCloseMatchCommand } from './src/commands/osu/closeMatchCommand.js';
+import { handleRejoinCommand } from './src/commands/osu/rejoinCommand.js';
 
 import {
     handleOsuProfileCommand,
@@ -83,9 +84,23 @@ client.on('messageCreate', async (message) => {
     if (content.startsWith('.osu') || content.startsWith('.profile') || content.startsWith('.p')) {
         return await handleOsuProfileCommand(message);
     }
-    if (content.startsWith('.rs') || content.startsWith('.recent') || content.startsWith('.r')) {
+
+    if (message.content.startsWith('.rejoin') || message.content.startsWith('!rejoin')) {
+        await handleRejoinCommand(message);
+    }
+
+    // Kiểm tra .r có khoảng trắng phía sau hoặc chỉ duy nhất chữ .r
+    if (
+        content.startsWith('.rs') ||
+        content.startsWith('.recent') ||
+        content.startsWith('.r ') || // Thêm khoảng trắng ở đây
+        content === '.r' ||
+        content.match(/^\.m\b/i)
+    ) {
         return await handleOsuRecentCommand(message);
     }
+
+    
     if (content.startsWith('.top') || content.startsWith('.t')) {
         return await handleOsuTopCommand(message);
     }
@@ -125,6 +140,8 @@ client.on('messageCreate', async (message) => {
     if (content.startsWith('.invosu') || content.startsWith('.inv') || content.startsWith('.invite')) {
         return await handleInviteCommand(message);
     }
+
+
 
     // ==========================================================
     // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
