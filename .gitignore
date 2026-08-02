@@ -16,4 +16,5 @@ build/
 Thumbs.db
 
 #datauser
-data/
+src/data/
+!src/data/.gitkeep
