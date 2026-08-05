@@ -5,7 +5,7 @@ import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 export async function handleMakeRoomCommand(message) {
     const args = message.content.trim().split(/ +/).slice(1);
 
-    // 🎯 1. BẮT BỘC PHẢI LINK PROFILE OSU! MỚI ĐƯỢC TẠO PHÒNG (Sử dụng Slash Command /link)
+    // 🎯 1. BẮT BỘC PHẢI LINK PROFILE OSU! MỚI ĐƯỢC TẠO PHÒNG
     const ownerOsuName = getLinkedOsuUsername(message.author.id);
 
     if (!ownerOsuName) {
@@ -85,7 +85,7 @@ export async function handleMakeRoomCommand(message) {
             activeLobbies.delete(matchId);
         });
 
-        const mpUrl = `https://osu.ppy.sh/mp/${matchId}`;
+        const mpUrl = `https://osu.ppy.sh/community/matches/${matchId}`;
 
         const embed = new EmbedBuilder()
             .setColor('#2b2d31')
@@ -96,8 +96,10 @@ export async function handleMakeRoomCommand(message) {
                 `Phòng Multiplayer đã được tạo thành công!${inviteStatusText}\n\n` +
                 `▸ **Match ID:** \`${matchId}\`\n` +
                 `▸ **Chủ phòng (osu!):** \`${ownerOsuName}\`\n` +
-                `▸ **Link tham gia:** [Bấm vào đây để vào phòng](${mpUrl})\n` +
-                `▸ **In-game Command:** \`/join #mp_${matchId}\`\n\n` +
+                `▸ **Link Match History:** [Bấm vào đây để xem chi tiết trận đấu](${mpUrl})\n\n` +
+                `🛠️ **Lệnh điều khiển nhanh:**\n` +
+                `• Mời người chơi: \`.inv ${matchId} <tên_player>\`\n` +
+                `• Đóng phòng này: \`.mc ${matchId}\`\n\n` +
                 `✨ *Ghi chú: Khi **${ownerOsuName}** join vào phòng, Yue sẽ tự trao Host & Ref luôn nhé!*`
             )
             .setFooter({ text: `Chủ phòng Discord: ${message.author.username} • Match ID: ${matchId}` })

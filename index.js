@@ -8,7 +8,7 @@ import { handleListenCommand } from './src/commands/listen.js';
 import { handleMakeRoomCommand } from './src/commands/osu/makeRoomCommand.js';
 import { handleInviteCommand } from './src/commands/osu/inviteCommand.js';
 import { handleCloseMatchCommand } from './src/commands/osu/closeMatchCommand.js';
-import { handleRejoinCommand } from './src/commands/osu/rejoinCommand.js';
+import { handleJoinRoomCommand } from './src/commands/osu/joinRoomCommand.js';
 
 import {
     handleOsuProfileCommand,
@@ -85,8 +85,8 @@ client.on('messageCreate', async (message) => {
         return await handleOsuProfileCommand(message);
     }
 
-    if (message.content.startsWith('.rejoin') || message.content.startsWith('!rejoin')) {
-        await handleRejoinCommand(message);
+    if (message.content.startsWith('.joinroom') || message.content.startsWith('!joinroom')) {
+        await handleJoinRoomCommand(message);
     }
 
     // Kiểm tra .r có khoảng trắng phía sau hoặc chỉ duy nhất chữ .r

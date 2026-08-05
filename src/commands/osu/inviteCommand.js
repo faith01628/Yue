@@ -20,12 +20,12 @@ export async function handleInviteCommand(message) {
     }
 
     // 🎯 1. BẮT BIẾN MATCH ID HOẶC TÊN CHỦ PHÒNG / TÊN PLAYER
-    const cleanArgs = rawArgs.filter(arg => !arg.startsWith('<@')); // Lọc bỏ tag user
+    const cleanArgs = rawArgs.filter(arg => !arg.startsWith('<@'));
 
     for (let i = 0; i < cleanArgs.length; i++) {
         const arg = cleanArgs[i];
         
-        // Check nếu là số (Match ID - thường từ 6 chữ số trở lên)
+        // Check nếu là số (Match ID - thường từ 5 chữ số trở lên)
         if (!targetMatchId && /^\d{5,10}$/.test(arg)) {
             targetMatchId = arg;
             continue;
@@ -47,7 +47,6 @@ export async function handleInviteCommand(message) {
 
     // TH 2: Tìm theo Tag Host (.inv @katashi nnpk)
     if (!selectedLobbyObj && targetHostUser) {
-        // Tìm phòng gần nhất của Host được tag
         const hostLobbies = Array.from(activeLobbies.values())
             .filter(item => item.ownerId === targetHostUser.id)
             .sort((a, b) => b.createdAt - a.createdAt);
@@ -59,18 +58,17 @@ export async function handleInviteCommand(message) {
     if (!selectedLobbyObj && targetPlayer && !targetMatchId) {
         const matchedHost = Array.from(activeLobbies.values())
             .filter(item => item.ownerTag.toLowerCase().includes(targetPlayer.toLowerCase()) || 
-                            item.lobby.name.toLowerCase().includes(targetPlayer.toLowerCase()))
+                            (item.lobby && item.lobby.name.toLowerCase().includes(targetPlayer.toLowerCase())))
             .sort((a, b) => b.createdAt - a.createdAt);
 
         if (matchedHost.length > 0) {
             selectedLobbyObj = matchedHost[0];
-            // Nếu argument 1 là tên Host, thì argument 2 (nếu có) sẽ là tên player
             const secondArg = cleanArgs.find(a => a.toLowerCase() !== targetPlayer.toLowerCase());
             targetPlayer = secondArg || senderOsuName;
         }
     }
 
-    // TH 4: Không chỉ định ID/Host -> Lấy phòng gần nhất do CHỦ PHÒNG tạo (nếu người gõ có phòng)
+    // TH 4: Không chỉ định ID/Host -> Lấy phòng gần nhất do CHỦ PHÒNG tạo
     if (!selectedLobbyObj) {
         const myLobbies = Array.from(activeLobbies.values())
             .filter(item => item.ownerId === message.author.id)
@@ -81,7 +79,7 @@ export async function handleInviteCommand(message) {
         }
     }
 
-    // TH 5: Nếu vẫn chưa thấy -> Lấy phòng mới nhất vừa tạo trên toàn hệ thống
+    // TH 5: Lấy phòng mới nhất vừa tạo trên toàn hệ thống
     if (!selectedLobbyObj) {
         const allLobbies = Array.from(activeLobbies.values()).sort((a, b) => b.createdAt - a.createdAt);
         if (allLobbies.length > 0) {
@@ -89,11 +87,10 @@ export async function handleInviteCommand(message) {
         }
     }
 
-    if (!selectedLobbyObj) {
+    if (!selectedLobbyObj || !selectedLobbyObj.lobby) {
         return message.reply('Không tìm thấy phòng phù hợp! Cú pháp: `.inv [Match_ID] <tên_player>`');
     }
 
-    // Tên player cần mời (Nếu không nhập tên player thì tự lấy tên ingame người gõ)
     const finalPlayerToInvite = targetPlayer || senderOsuName;
 
     try {

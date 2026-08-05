@@ -1,11 +1,10 @@
-// Map lưu trữ hàng đợi Autohost cho từng phòng (#mp_id)
-// Key = channelName (#mp_12345), Value = Array chứa danh sách username [player1, player2, ...]
-const autohostQueues = new Map();
-const isAutohostActive = new Map(); // Trạng thái bật/tắt autohost của phòng
+import { isUserRef } from './refCommands.js';
+import { clearLobbyRequests } from './mapCommands.js';
 
-/**
- * Lấy hoặc khởi tạo Queue cho phòng
- */
+const autohostQueues = new Map();
+const isAutohostActive = new Map();
+const skipVotes = new Map();
+
 function getQueue(channelName) {
     if (!autohostQueues.has(channelName)) {
         autohostQueues.set(channelName, []);
@@ -13,94 +12,219 @@ function getQueue(channelName) {
     return autohostQueues.get(channelName);
 }
 
-/**
- * Hiển thị danh sách hàng đợi Host dạng chuỗi đẹp mắt
- */
+function getVotes(channelName) {
+    if (!skipVotes.has(channelName)) {
+        skipVotes.set(channelName, new Set());
+    }
+    return skipVotes.get(channelName);
+}
+
+export function clearSkipVotes(channelName) {
+    if (skipVotes.has(channelName)) {
+        skipVotes.get(channelName).clear();
+    }
+}
+
 function formatQueueText(queue) {
     if (!queue || queue.length === 0) return 'Hàng đợi trống';
     return queue.join(' ➔ ');
 }
 
-/**
- * Xử lý các lệnh Autohost/Host (.ah / .autohost / .host)
- */
+export function isAutohostOn(channelName) {
+    return !!isAutohostActive.get(channelName);
+}
+
+function isCurrentHost(channel, username) {
+    const slots = channel.lobby?.slots || [];
+    const hostSlot = slots.find(s => s && s.user && s.isHost);
+    if (hostSlot && hostSlot.user?.username) {
+        return hostSlot.user.username.toLowerCase() === username.toLowerCase();
+    }
+    const firstPlayer = slots.find(s => s && s.user);
+    if (firstPlayer && firstPlayer.user?.username) {
+        return firstPlayer.user.username.toLowerCase() === username.toLowerCase();
+    }
+    return false;
+}
+
+export function syncLobbyPlayersToQueue(channel) {
+    const channelName = channel.name;
+    if (!isAutohostActive.get(channelName)) return;
+
+    const queue = getQueue(channelName);
+    const slots = channel.lobby?.slots || [];
+    const currentPlayers = slots
+        .filter(slot => slot && slot.user)
+        .map(slot => slot.user.username);
+
+    for (const player of currentPlayers) {
+        const exists = queue.some(p => p.toLowerCase() === player.toLowerCase());
+        if (!exists) {
+            queue.push(player);
+        }
+    }
+}
+
+export function addPlayerToQueue(channelName, username) {
+    if (!isAutohostActive.get(channelName)) return;
+    const queue = getQueue(channelName);
+
+    const exists = queue.some(p => p.toLowerCase() === username.toLowerCase());
+    if (!exists) {
+        queue.push(username);
+    }
+}
+
+export async function removePlayerFromQueue(channel, username) {
+    const channelName = channel.name || channel;
+    if (!isAutohostActive.get(channelName)) return;
+
+    const queue = getQueue(channelName);
+    const index = queue.findIndex(p => p.toLowerCase() === username.toLowerCase());
+
+    if (index !== -1) {
+        const wasHost = (index === 0);
+        queue.splice(index, 1);
+
+        const votes = getVotes(channelName);
+        votes.delete(username.toLowerCase());
+
+        if (wasHost && queue.length > 0) {
+            clearSkipVotes(channelName); 
+            clearLobbyRequests(channelName);
+            const nextHost = queue[0];
+            await channel.sendMessage(`!mp host ${nextHost}`);
+            await channel.sendMessage(`YUE: [Autohost] Host cũ đã rời phòng! Host mới: ${nextHost} | Hàng đợi: ${formatQueueText(queue)}`);
+        }
+    }
+}
+
+export async function rotateToNextHost(channel) {
+    const channelName = channel.name;
+    if (!isAutohostActive.get(channelName)) return;
+
+    syncLobbyPlayersToQueue(channel);
+    clearSkipVotes(channelName); 
+    clearLobbyRequests(channelName);
+
+    const queue = getQueue(channelName);
+
+    if (queue.length === 0) {
+        return await channel.sendMessage('YUE: [Autohost] Hàng đợi trống, không có ai trong phòng!');
+    }
+
+    if (queue.length === 1) {
+        return await channel.sendMessage(`YUE: [Autohost] Trong phòng chỉ còn 1 người (${queue[0]}), tiếp tục giữ Host!`);
+    }
+
+    const previousHost = queue.shift();
+    queue.push(previousHost);
+
+    const nextHost = queue[0];
+
+    await channel.sendMessage(`!mp host ${nextHost}`);
+    await channel.sendMessage(
+        `YUE: [Autohost] Host tiếp theo: ${nextHost} | Hàng đợi: ${formatQueueText(queue)}`
+    );
+}
+
 export async function handleHostCommands(channel, message, args, command) {
     const channelName = channel.name;
     const sender = message.user?.username || 'Player';
     const queue = getQueue(channelName);
 
-    // 🎯 1. BẬT / TẮT HOẶC XEM TRẠNG THÁI AUTOHOST (.ah / .autohost)
-    if (['.ah', '!ah', '.autohost', '!autohost'].includes(command)) {
-        const subCommand = args[0]?.toLowerCase();
-
-        // Nếu gõ .ah off -> Tắt Autohost
-        if (subCommand === 'off') {
-            isAutohostActive.set(channelName, false);
-            autohostQueues.set(channelName, []);
-            return await channel.sendMessage('YUE: [Autohost] Đã TẮT chế độ Autohost cho phòng!');
+    // 🎯 LỆNH DIRECT HOST (.host <username>) - CHỈ HOST/REF DÙNG
+    if (['.host', '!host'].includes(command)) {
+        if (!isCurrentHost(channel, sender) && !isUserRef(channelName, sender)) {
+            return await channel.sendMessage(`YUE: Chỉ Host hoặc Ref mới có quyền dùng lệnh .host!`);
         }
 
-        // Bật Autohost
-        isAutohostActive.set(channelName, true);
+        const targetSearch = args.join(' ').trim().toLowerCase();
+        if (!targetSearch) {
+            return await channel.sendMessage(`YUE: Vui lòng nhập tên người chơi cần nhường host (Ví dụ: .host katashi)!`);
+        }
 
-        // Nếu hàng đợi đang trống, thêm các thành viên hiện tại vào (nếu có) hoặc thêm sender
+        // Tìm người chơi trong lobby khớp với từ khóa
+        const slots = channel.lobby?.slots || [];
+        const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
+        const matchedUser = activePlayers.find(p => p.toLowerCase().includes(targetSearch));
+
+        if (!matchedUser) {
+            return await channel.sendMessage(`YUE: Không tìm thấy người chơi "${args[0]}" trong phòng!`);
+        }
+
+        await channel.sendMessage(`!mp host ${matchedUser}`);
+        return await channel.sendMessage(`YUE: Đã chuyển Host cho ${matchedUser}!`);
+    }
+
+    // TẮT AUTOHOST
+    if (['.ahoff', '!ahoff', '.unah', '!unah', '.autohostoff'].includes(command) || (command === '.ah' && args[0]?.toLowerCase() === 'off')) {
+        isAutohostActive.set(channelName, false);
+        autohostQueues.set(channelName, []);
+        clearSkipVotes(channelName);
+        clearLobbyRequests(channelName);
+        return await channel.sendMessage('YUE: [Autohost] Đã TẮT chế độ Autohost cho phòng!');
+    }
+
+    // BẬT AUTOHOST (.ah)
+    if (['.ah', '!ah', '.autohost'].includes(command)) {
+        isAutohostActive.set(channelName, true);
+        syncLobbyPlayersToQueue(channel);
+
         if (queue.length === 0) {
             queue.push(sender);
         }
 
-        const nextHost = queue[0];
+        const currentHost = queue[0];
+        await channel.sendMessage(`!mp host ${currentHost}`);
         return await channel.sendMessage(
-            `YUE: [Autohost] Đã BẬT! Host hiện tại: ${nextHost} | Thứ tự: ${formatQueueText(queue)}`
+            `YUE: [Autohost] Đã BẬT! Host hiện tại: ${currentHost} | Hàng đợi: ${formatQueueText(queue)}`
         );
     }
 
-    // 🎯 2. LỆNH CHUYỂN HOST TIẾP THEO SAU KHI XONG MAP (Hoặc gõ .skip / .next)
+    // CHUYỂN HOST KHI AUTOHOST ON (.next / .skip)
     if (['.next', '!next', '.skip', '!skip'].includes(command)) {
         if (!isAutohostActive.get(channelName)) {
             return await channel.sendMessage('YUE: Chế độ Autohost chưa được bật! Gõ `.ah` để bật nhé.');
         }
 
         if (queue.length <= 1) {
-            return await channel.sendMessage(`YUE: [Autohost] Hàng đợi chỉ có 1 người (${queue[0]}), không thể xoay vòng!`);
+            return await channel.sendMessage(`YUE: [Autohost] Trong phòng chỉ có 1 người (${queue[0]}), không thể đổi!`);
         }
 
-        // 🔄 XOAY VÒNG HÀNG ĐỢI: Đưa người đầu tiên xuống cuối cùng
-        const currentHost = queue.shift();
-        queue.push(currentHost);
+        if (isUserRef(channelName, sender)) {
+            await channel.sendMessage(`YUE: Ref (${sender}) đã sử dụng quyền chuyển Host trực tiếp!`);
+            return await rotateToNextHost(channel);
+        }
 
-        const nextHost = queue[0];
+        syncLobbyPlayersToQueue(channel);
+        const votes = getVotes(channelName);
+        const senderLower = sender.toLowerCase();
 
-        // Gửi lệnh set host cho Bancho
-        await channel.sendMessage(`!mp host ${nextHost}`);
-        
-        // Thông báo danh sách thứ tự mới
-        return await channel.sendMessage(
-            `YUE: [Autohost] Lượt host tiếp theo thuộc về: ${nextHost} | Thứ tự hàng đợi: ${formatQueueText(queue)}`
-        );
+        if (votes.has(senderLower)) {
+            return await channel.sendMessage(`YUE: ${sender}, bạn đã bỏ phiếu chuyển host rồi! (${votes.size}/${queue.length})`);
+        }
+
+        votes.add(senderLower);
+        const currentVotes = votes.size;
+        const totalPlayers = queue.length;
+        const requiredVotes = Math.floor(totalPlayers / 2) + 1;
+
+        if (currentVotes >= requiredVotes) {
+            await channel.sendMessage(`YUE: Số phiếu chuyển host đã đạt ${currentVotes}/${totalPlayers} (>50%). Tiến hành chuyển Host!`);
+            return await rotateToNextHost(channel);
+        } else {
+            return await channel.sendMessage(`YUE: ${sender} muốn chuyển Host (${currentVotes}/${totalPlayers}). Cần thêm ${requiredVotes - currentVotes} phiếu nữa (gõ .next)!`);
+        }
     }
-}
 
-/**
- * 🎯 LẮNG NGHE SỰ KIỆN PLAYER JOIN/LEAVE TRONG PHÒNG ĐỂ CẬP NHẬT QUEUE
- * (Gọi hàm này trong banchoService khi có sự kiện join/part)
- */
-export function handlePlayerJoinAutohost(channelName, username) {
-    if (!isAutohostActive.get(channelName)) return;
-    const queue = getQueue(channelName);
-    
-    // Nếu người chơi chưa có trong queue thì thêm vào CỦI HÀNG ĐỢI (Đúng chuẩn 3 4 1 2 5)
-    if (!queue.includes(username)) {
-        queue.push(username);
-    }
-}
+    // KIỂM TRA HÀNG ĐỢI (.q / .queue)
+    if (['.q', '!q', '.queue', '!queue'].includes(command)) {
+        if (!isAutohostActive.get(channelName)) {
+            return await channel.sendMessage('YUE: Chế độ Autohost hiện đang TẮT.');
+        }
 
-export function handlePlayerLeaveAutohost(channelName, username) {
-    if (!isAutohostActive.get(channelName)) return;
-    const queue = getQueue(channelName);
-    
-    // Bỏ người chơi khỏi queue nếu họ rời phòng
-    const index = queue.indexOf(username);
-    if (index !== -1) {
-        queue.splice(index, 1);
+        syncLobbyPlayersToQueue(channel);
+        return await channel.sendMessage(`YUE: [Hàng đợi Host] ${formatQueueText(queue)}`);
     }
 }

@@ -1,59 +1,81 @@
-import { activeLobbies } from '../../services/osu/banchoService.js';
-
-/**
- * Hàm hỗ trợ giới hạn thời gian chờ đóng phòng
- */
-const closeLobbyWithTimeout = (lobby, ms = 2500) => {
-    return Promise.race([
-        lobby.closeLobby(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Bancho timeout')), ms))
-    ]);
-};
+import { activeLobbies, getBanchoClient } from '../../services/osu/banchoService.js';
+import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 
 export async function handleCloseMatchCommand(message) {
-    const args = message.content.trim().split(/ +/).slice(1);
-    let matchId = args[0];
+    const rawArgs = message.content.trim().split(/ +/).slice(1);
+    let matchId = null;
 
-    // 🎯 1. NẾU KHÔNG CÓ MATCH ID -> TỰ LẤY PHÒNG DO CHÍNH NGƯỜI GÕ LỆNH TẠO
-    if (!matchId) {
-        const myLobbies = Array.from(activeLobbies.values())
-            .filter(item => item.ownerId === message.author.id)
-            .sort((a, b) => b.createdAt - a.createdAt);
-
-        if (myLobbies.length > 0) {
-            matchId = String(myLobbies[0].lobby.id);
-        } else {
-            return message.reply('⚠️ Ông hiện không sở hữu phòng Multiplayer nào đang mở cả!');
+    // 🎯 1. BẮT MATCH ID TỪ THAM SỐ GÕ VÀO (Ví dụ: .mc 121576805)
+    for (const arg of rawArgs) {
+        if (/^\d{5,10}$/.test(arg)) {
+            matchId = arg;
+            break;
         }
     }
 
-    // 🎯 2. KIỂM TRA XEM PHÒNG CÓ TRONG BỘ NHỚ RAM KHÔNG
-    if (!activeLobbies.has(matchId)) {
+    // 🎯 2. NẾU KHÔNG NHẬP MATCH ID -> TỰ TÌM PHÒNG GẦN NHẤT CỦA CHÍNH NGƯỜI GÕ LỆNH
+    if (!matchId) {
+        const myLobbies = Array.from(activeLobbies.entries())
+            .filter(([_, item]) => item.ownerId === message.author.id)
+            .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+
+        if (myLobbies.length > 0) {
+            matchId = myLobbies[0][0];
+        }
+    }
+
+    if (!matchId) {
+        return message.reply('⚠️ Không tìm thấy phòng Multiplayer nào để đóng! Cú pháp: `.mc <Match_ID>` (Ví dụ: `.mc 121576805`).');
+    }
+
+    // 🎯 3. BẢO VỆ SECURITY: KIỂM TRA QUYỀN ĐÓNG PHÒNG
+    const lobbyData = activeLobbies.get(matchId);
+
+    if (!lobbyData) {
+        return message.reply(`⚠️ Yue hiện không quản lý phòng Match ID \`${matchId}\` hoặc phòng đã bị đóng trước đó rồi!`);
+    }
+
+    // Lấy tên ingame osu! của người gõ lệnh Discord (nếu có)
+    const senderOsuName = getLinkedOsuUsername(message.author.id);
+    const isRoomOwner = lobbyData.ownerId === message.author.id;
+
+    // Lấy object kênh Bancho IRC của phòng này
+    const bancho = getBanchoClient();
+    const mpChannel = bancho?.getChannel(`#mp_${matchId}`);
+    const lobby = mpChannel?.lobby;
+
+    let isRealHostOrRef = false;
+    if (lobby && senderOsuName) {
+        const slots = lobby.slots || [];
+        // Kiểm tra xem user gõ lệnh có đang ở trong phòng và làm Host không
+        const isHost = slots.some(s => s && s.user && s.user.username.toLowerCase() === senderOsuName.toLowerCase() && s.isHost);
+        // Hoặc kiểm tra trong danh sách Ref của phòng (nếu SDK hỗ trợ)
+        isRealHostOrRef = isHost;
+    }
+
+    // NẾU KHÔNG PHẢI CHỦ PHÒNG ĐĂNG KÝ VÀ CŨNG KHÔNG PHẢI HOST IN-GAME -> CHẶN NGAY!
+    if (!isRoomOwner && !isRealHostOrRef) {
         return message.reply(
-            `❌ Không tìm thấy Match ID \`${matchId}\` trong hệ thống (có thể phòng đã được đóng trước đó)!`
+            `🚫 **CẢNH BÁO TÍNH NĂNG BẢO VỆ:**\n` +
+            `Ông không phải là người gọi Yue vào phòng \`#mp_${matchId}\` và cũng không phải là Host/Ref của phòng này!\n` +
+            `👉 Không được chơi xấu đóng phòng của người khác nha ông bạn!`
         );
     }
 
-    const targetLobbyObj = activeLobbies.get(matchId);
-
-    // Bắt buộc ID Discord người gõ lệnh phải TRÙNG VỚI chủ phòng
-    if (targetLobbyObj.ownerId !== message.author.id) {
-        return message.reply(
-            `⛔ **Không thể đóng phòng!** Ông không phải là người tạo phòng Match ID \`${matchId}\`!`
-        );
-    }
-
-    await message.channel.sendTyping();
-
+    // 🎯 4. THỰC HIỆN ĐÓNG PHÒNG AN TOÀN
     try {
-        // Cố gắng gửi lệnh đóng phòng tới Bancho (Timeout sau 2.5s nếu phòng đã mất)
-        await closeLobbyWithTimeout(targetLobbyObj.lobby, 2500);
-    } catch (err) {
-        console.log(`[Info] Room ${matchId} đã bị hủy/timeout trên Bancho, tiến hành force dọn RAM...`);
-    } finally {
-        // 🎯 BẮT BỘC: Luôn dọn dẹp RAM ngay lập tức không cho kẹt bộ nhớ
-        activeLobbies.delete(matchId);
-    }
+        await message.channel.sendTyping();
 
-    return message.reply(`🔒 Đã đóng và dọn dẹp thành công phòng Match ID \`${matchId}\`! Ông có thể tạo phòng mới rồi đó.`);
+        if (mpChannel) {
+            await mpChannel.sendMessage(`!mp close`);
+            await mpChannel.leave();
+        }
+
+        activeLobbies.delete(matchId);
+        return message.reply(`✅ Đã đóng thành công phòng Multiplayer osu! (\`#mp_${matchId}\`)!`);
+
+    } catch (err) {
+        console.error('❌ Lỗi khi đóng match:', err);
+        return message.reply('YUE: Có lỗi xảy ra khi đóng phòng Multiplayer!');
+    }
 }

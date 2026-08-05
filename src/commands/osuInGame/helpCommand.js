@@ -1,8 +1,13 @@
 export async function handleInGameHelp(channel) {
-    const helpText = 
-        `YUE IN-GAME COMMANDS: ` +
-        `▸ Multi: .host <user> | .ah | .addref <user> | .rmref <user> | .abort | .time <s` +
-        `▸ Stats & AI: .rs [user] | .yue <câu_hỏi>`;
+    const helpLines = [
+        "=== YUE BOT HELP ===",
+        "AI Chat: .yue <Câu hỏi/lệnh> (Ví dụ: .yue đổi host cho kata | .yue pick map 5 sao)",
+        "Map: .rnd [star] [time] [status] (Ví dụ: .rnd 5.5 5m rd) | .a [user] (Duyệt map) | .dl (Link map)",
+        "Host/Ref: .host <user> | .ah / .ahoff [on/off] (Autohost) | .next (Skip host) | .abort | .time <giây>",
+        "Player: .rs (Recent Score) | .q (Hàng đợi host)"
+    ];
 
-    return await channel.sendMessage(helpText);
+    for (const line of helpLines) {
+        await channel.sendMessage(line);
+    }
 }

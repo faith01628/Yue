@@ -1,10 +1,17 @@
 import banchojs from 'bancho.js';
 import { askYue } from '../aiService.js';
 
-// Import các handler lệnh in-game từ thư mục osuInGame
 import { handlePlayerCommands } from '../../commands/osuInGame/playerCommands.js';
 import { handleInGameHelp } from '../../commands/osuInGame/helpCommand.js';
-import { handleHostCommands } from '../../commands/osuInGame/hostCommands.js';
+import { handleMapCommands, setRoomCurrentMap, currentRoomMapId } from '../../commands/osuInGame/mapCommands.js';
+import { handleRefCommands, isUserRef } from '../../commands/osuInGame/refCommands.js';
+import {
+    handleHostCommands,
+    addPlayerToQueue,
+    removePlayerFromQueue,
+    rotateToNextHost,
+    isAutohostOn
+} from '../../commands/osuInGame/hostCommands.js';
 
 const { BanchoClient } = banchojs;
 
@@ -15,36 +22,64 @@ const bancho = new BanchoClient({
 });
 
 let isConnected = false;
-
-// 🎯 Map quản lý phòng Multiplayer trên Discord: Key = Match ID, Value = Lobby Object
 export const activeLobbies = new Map();
-
-// 🎯 Bộ đếm Cooldown cho kênh In-Game (#mp_...) tránh spam IRC
 const channelCooldowns = new Map();
-const COOLDOWN_TIME_MS = 5000; // 5 giây Cooldown mỗi phòng
+const COOLDOWN_TIME_MS = 5000;
 
-/**
- * Hàm hỗ trợ ép Bancho Client join lại một phòng Multiplayer cụ thể & gán sự kiện Auto Start
- */
+function isCurrentHost(channel, username) {
+    const slots = channel.lobby?.slots || [];
+    const hostSlot = slots.find(s => s && s.user && s.isHost);
+    if (hostSlot && hostSlot.user?.username) {
+        return hostSlot.user.username.toLowerCase() === username.toLowerCase();
+    }
+    const firstPlayer = slots.find(s => s && s.user);
+    if (firstPlayer && firstPlayer.user?.username) {
+        return firstPlayer.user.username.toLowerCase() === username.toLowerCase();
+    }
+    return false;
+}
+
+function attachLobbyEvents(channel) {
+    const lobby = channel.lobby;
+    if (!lobby) return;
+
+    // 🎯 TỰ ĐỘNG BẮT EVENT ĐỔI MAP
+    lobby.on("beatmap", (beatmap) => {
+        if (beatmap && beatmap.id) {
+            setRoomCurrentMap(channel.name, beatmap.id);
+            console.log(`[Lobby Event] 🗺️ Đã cập nhật Beatmap ID: ${beatmap.id}`);
+        }
+    });
+
+    // 🎯 FIX CHUẨN TỰ ĐỘNG START KHI TOÀN BỘ PLAYER READY
+    lobby.on("allPlayersReady", async () => {
+        const slots = lobby.slots?.filter(s => s && s.user) || [];
+        if (slots.length === 0) return;
+
+        console.log(`[AutoStart] Tất cả người chơi trong ${channel.name} đã Ready hợp lệ!`);
+        await channel.sendMessage("YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...");
+        await channel.sendMessage("!mp start 10");
+    });
+
+    lobby.on("playerJoined", (obj) => {
+        const username = obj.player?.user?.username || obj.user?.username;
+        if (username) addPlayerToQueue(channel.name, username);
+    });
+
+    lobby.on("playerLeft", (obj) => {
+        const username = obj.player?.user?.username || obj.user?.username;
+        if (username) removePlayerFromQueue(channel, username);
+    });
+}
+
 export async function forceJoinLobby(matchId) {
     try {
-        // Đảm bảo Bancho đã kết nối trước khi join
         await initBancho();
-
         const channelName = `#mp_${matchId}`;
         const channel = bancho.getChannel(channelName);
-        
-        await channel.join();
 
-        // Lắng nghe sự kiện allPlayersReady trực tiếp từ object Lobby của bancho.js
-        const lobby = channel.lobby;
-        if (lobby) {
-            lobby.on("allPlayersReady", async () => {
-                console.log(`[AutoStart] Tất cả người chơi trong ${channelName} đã Ready!`);
-                await channel.sendMessage("YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...");
-                await channel.sendMessage("!mp start 10");
-            });
-        }
+        await channel.join();
+        attachLobbyEvents(channel);
 
         console.log(`✅ Đã ép Yue rejoin thành công vào ${channelName}`);
         return true;
@@ -54,9 +89,6 @@ export async function forceJoinLobby(matchId) {
     }
 }
 
-/**
- * Khởi tạo kết nối tới Bancho IRC (DUY NHẤT 1 HÀM)
- */
 export async function initBancho() {
     if (isConnected) return bancho;
     try {
@@ -64,11 +96,9 @@ export async function initBancho() {
         isConnected = true;
         console.log('✅ Đã kết nối thành công tới osu! Bancho IRC!');
 
-        // Lắng nghe chat phòng Multi
         bancho.on('PM', handleInGameChat);
         bancho.on('CM', handleInGameChat);
 
-        // 🔄 Tự động rejoin lại các phòng trong RAM (nếu có) khi restart bot
         for (const [matchId] of activeLobbies.entries()) {
             await forceJoinLobby(matchId);
         }
@@ -79,70 +109,171 @@ export async function initBancho() {
     return bancho;
 }
 
+async function fetchBeatmapDetail(beatmapId) {
+    if (!beatmapId) return null;
+    try {
+        const apiKey = process.env.OSU_API_KEY;
+        if (!apiKey) return null;
+
+        const res = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${beatmapId}`);
+        const data = await res.json();
+
+        if (data && data.length > 0) {
+            const bm = data[0];
+            return `${bm.artist} - ${bm.title} [${bm.version}] (${parseFloat(bm.difficultyrating).toFixed(2)}★)`;
+        }
+    } catch (e) {
+        console.error('Lỗi fetch detail beatmap cho Context AI:', e.message);
+    }
+    return null;
+}
+
 /**
- * Xử lý tin nhắn chat từ Bancho IRC trong phòng Multi #mp_...
+ * 🎯 HÀM ĐỊNH TUYẾN THỰC THI LỆNH (Dùng chung cho người dùng gõ & AI sinh ra)
  */
+async function executeRoutedCommand(channel, messageObj, commandString, senderUsername) {
+    const args = commandString.trim().split(/ +/);
+    const command = args[0].toLowerCase();
+    const commandArgs = args.slice(1);
+
+    if (command.startsWith('!mp')) {
+        return await channel.sendMessage(commandString);
+    }
+    if (['.addref', '!addref', '.rmref', '!rmref', '.refs', '!refs'].includes(command)) {
+        return await handleRefCommands(channel, messageObj, commandArgs, command);
+    }
+    if (['.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random', '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link', '.a', '!a', '.accept', '!accept'].includes(command)) {
+        return await handleMapCommands(channel, messageObj, commandArgs, command);
+    }
+    if (['.rs', '!rs', '.r', '!r'].includes(command)) {
+        return await handlePlayerCommands(channel, messageObj, commandArgs, command);
+    }
+    if ([
+        '.ah', '!ah', '.autohost', '!autohost',
+        '.ahoff', '!ahoff', '.unah', '!unah', '.autohostoff',
+        '.next', '!next', '.skip', '!skip',
+        '.q', '!q', '.queue', '!queue'
+    ].includes(command)) {
+        return await handleHostCommands(channel, messageObj, commandArgs, command);
+    }
+}
+
 async function handleInGameChat(message) {
     const channel = message.channel;
     const channelName = channel?.name || '';
     const content = message.message.trim();
     const senderUsername = message.user?.ircUsername || message.user?.username || 'Player';
 
-    // 1. Chỉ lắng nghe trong kênh Multiplayer (bắt đầu bằng #mp_)
     if (!channelName.startsWith('#mp_')) return;
-
-    // 2. Bỏ qua tin nhắn do bot/Yue tự gửi ra
     if (content.startsWith('YUE:')) return;
 
-    // 🎯 3. BẮT SỰ KIỆN AUTO START TỪ TIN NHẮN CHAT BANCHOBOT (DỰ PHÒNG CHẮC CHẮN 100%)
+    // Bắt sự kiện hệ thống BanchoBot
     if (senderUsername.toLowerCase() === 'banchobot') {
-        if (content.toLowerCase().includes('all players are ready')) {
-            await channel.sendMessage('YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...');
-            return await channel.sendMessage('!mp start 10');
+        const lowerContent = content.toLowerCase();
+
+        if (lowerContent.includes('changed beatmap to') || lowerContent.includes('beatmap changed to')) {
+            const match = content.match(/\/(?:b|beatmaps)\/(\d+)/i);
+            if (match && match[1]) {
+                setRoomCurrentMap(channelName, match[1]);
+                console.log(`[BanchoBot Tracker] 🗺️ Đã lưu Beatmap ID: ${match[1]}`);
+            }
+        }
+
+        if (lowerContent.includes('joined in slot')) {
+            const joinedUser = content.split(' joined in slot')[0].trim();
+            if (joinedUser) addPlayerToQueue(channelName, joinedUser);
+            return;
+        }
+
+        if (lowerContent.includes('left the game')) {
+            const leftUser = content.split(' left the game')[0].trim();
+            if (leftUser) await removePlayerFromQueue(channel, leftUser);
+            return;
+        }
+
+        if (lowerContent.includes('the match has finished')) {
+            if (isAutohostOn(channelName)) {
+                await channel.sendMessage('YUE: Trận đấu kết thúc! Đổi Host cho người tiếp theo...');
+                setTimeout(async () => await rotateToNextHost(channel), 1000);
+            }
+            return;
         }
     }
 
-    const args = content.split(/ +/);
-    const command = args[0].toLowerCase();
-    const commandArgs = args.slice(1);
-
-    // 🎯 Lệnh Help (.yue help / .help / !help)
-    if (content.toLowerCase() === '.yue help' || command === '.help' || command === '!help') {
+    if (content.toLowerCase() === '.yue help' || content.startsWith('.help') || content.startsWith('!help')) {
         return await handleInGameHelp(channel);
     }
 
-    // 🎯 Trò chuyện AI với Yue (.yue <câu hỏi> / !yue <câu hỏi>)
-    if (command === '.yue' || command === '!yue') {
+    // 🎯 1. KIỂM TRA LỆNH THƯỜNG -> NẾU LÀ LỆNH THƯỜNG THÌ THỰC THI TRỰC TIẾP
+    const firstWord = content.split(/ +/)[0].toLowerCase();
+    const standardCommands = [
+        '.host', '!host',
+        '.addref', '!addref', '.rmref', '!rmref', '.refs', '!refs',
+        '.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random',
+        '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link', '.a', '!a', '.accept', '!accept',
+        '.rs', '!rs', '.r', '!r',
+        '.ah', '!ah', '.autohost', '!autohost', '.ahoff', '!ahoff', '.unah', '!unah',
+        '.next', '!next', '.skip', '!skip', '.q', '!q', '.queue', '!queue'
+    ];
+
+    if (standardCommands.includes(firstWord)) {
+        return await executeRoutedCommand(channel, message, content, senderUsername);
+    }
+
+    // 🎯 2. NẾU LÀ AI CHAT (.yue <câu hỏi>) -> PHÂN TÍCH VÀ TỰ ĐỘNG CHẠY LỆNH NẾU CẦN
+    if (firstWord === '.yue' || firstWord === '!yue') {
         const now = Date.now();
         const lastUsed = channelCooldowns.get(channelName) || 0;
         if (now - lastUsed < COOLDOWN_TIME_MS) return;
         channelCooldowns.set(channelName, now);
 
-        const userPrompt = commandArgs.join(' ').trim();
+        const userPrompt = content.substring(firstWord.length).trim();
         if (!userPrompt) {
-            return await channel.sendMessage(`YUE: Kêu tui gì đó ${senderUsername}? Gõ ".yue <câu_hỏi>" để chat hoặc ".yue help" để xem lệnh nhé!`);
+            return await channel.sendMessage(`YUE: Kêu tui gì đó ${senderUsername}? Gõ ".yue <câu_hỏi>" để chat!`);
         }
 
         try {
-            let aiReply = await askYue(`ingame_${senderUsername}`, senderUsername, userPrompt, null);
-            aiReply = aiReply.replace(/[\r\n]+/g, ' ').trim();
-            if (aiReply.length > 180) aiReply = aiReply.substring(0, 177) + '...';
+            const lobby = channel.lobby;
+            const slots = lobby?.slots || [];
+            const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
+            const hostUser = lobby?.host?.username || slots.find(s => s && s.user && s.isHost)?.user?.username || activePlayers[0] || 'Chưa rõ';
 
-            return await channel.sendMessage(`YUE: ${aiReply}`);
+            let senderRole = "Player thường";
+            if (isCurrentHost(channel, senderUsername)) senderRole = "Host";
+            else if (isUserRef(channelName, senderUsername)) senderRole = "Ref";
+
+            let currentMapText = 'Chưa chọn map';
+            const savedMapId = currentRoomMapId.get(channelName);
+            if (savedMapId) {
+                const mapInfo = await fetchBeatmapDetail(savedMapId);
+                if (mapInfo) currentMapText = mapInfo;
+            }
+
+            const ingameContext = {
+                host: hostUser,
+                sender: senderUsername,
+                senderRole: senderRole,
+                playerCount: activePlayers.length,
+                playersList: activePlayers.join(', '),
+                currentMap: currentMapText
+            };
+
+            const aiRawJson = await askYue(`ingame_${senderUsername}`, senderUsername, userPrompt, null, false, ingameContext);
+            const aiData = JSON.parse(aiRawJson);
+
+            if (aiData.reply) {
+                await channel.sendMessage(`YUE: ${aiData.reply}`);
+            }
+
+            if (aiData.command && aiData.command.trim() !== '') {
+                const fakeMessage = { ...message, message: aiData.command };
+                await executeRoutedCommand(channel, fakeMessage, aiData.command, senderUsername);
+            }
+
         } catch (err) {
-            console.error('❌ Lỗi AI In-Game:', err);
-            return await channel.sendMessage(`YUE: Huhu đầu tui đang bị quá tải rồi ${senderUsername} ơi...`);
+            console.error('❌ Lỗi AI In-Game (JSON Parse):', err);
+            return await channel.sendMessage(`YUE: Lú quá xử lý không nổi lệnh này rồi ông bạn...`);
         }
-    }
-
-    // 🎯 Lệnh tra cứu score gần nhất (.rs / !rs)
-    if (['.rs', '!rs'].includes(command)) {
-        return await handlePlayerCommands(channel, message, commandArgs, command);
-    }
-
-    // 🎯 Lệnh Autohost (.ah / .autohost / .next / .skip)
-    if (['.ah', '!ah', '.autohost', '!autohost', '.next', '!next', '.skip', '!skip'].includes(command)) {
-        return await handleHostCommands(channel, message, commandArgs, command);
     }
 }
 

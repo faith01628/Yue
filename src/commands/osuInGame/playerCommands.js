@@ -9,10 +9,20 @@ function parseModsText(mods) {
     return modString ? ` +${modString}` : '';
 }
 
+/**
+ * Hàm cắt gọn tên map nếu quá dài (Cắt linh hoạt theo giới hạn ký tự tối đa)
+ */
+function formatShortTitle(title, maxLength = 35) {
+    if (!title) return '';
+    if (title.length <= maxLength) return title;
+    return title.substring(0, maxLength - 3).trim() + '...';
+}
+
 export async function handlePlayerCommands(channel, message, args, command) {
     const sender = message.user?.username || 'Player';
 
-    if (command === '.rs' || command === '!rs') {
+    // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r
+    if (['.rs', '!rs', '.r', '!r'].includes(command)) {
         let targetUser = args.join(' ').trim() || sender;
 
         try {
@@ -26,11 +36,14 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const beatmap = score.beatmap;
             const beatmapset = score.beatmapset;
 
-            // 1. Tên người chơi chuẩn (Loại bỏ ngoặc vuông để tránh dính 'wiki:')
+            // 1. Tên người chơi
             const displayUser = data.user?.username || targetUser;
 
-            // 2. Tên Beatmap
-            const mapTitle = `${beatmapset?.artist || ''} - ${beatmapset?.title || ''} [${beatmap?.version || ''}]`;
+            // 🎯 2. Tên Beatmap (Chỉ lấy Tên Bài Hát, bỏ Artist/Mapper + Cắt ngắn linh hoạt nếu > 35 ký tự)
+            const rawTitle = beatmapset?.title || 'Unknown Map';
+            const shortTitle = formatShortTitle(rawTitle, 35);
+            const difficultyName = beatmap?.version ? `[${beatmap.version}]` : '';
+            const mapTitle = `${shortTitle} ${difficultyName}`;
             
             // 3. Mods (+HRDT, +HD...)
             const modsText = parseModsText(score.mods);
@@ -39,13 +52,7 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const ppVal = score.pp ? Math.round(score.pp) : 0;
             const ppText = `${ppVal}pp`;
 
-            // 5. Score & Combo (Nếu beatmap.max_combo bị undefined thì fallback lấy max_combo của chính score hoặc 0)
-            const formattedScore = (score.score || 0).toLocaleString('en-US');
-            const mapMaxComboVal = beatmap?.max_combo || score.beatmap_max_combo || score.max_combo || 0;
-            const maxComboMapText = mapMaxComboVal > 0 ? `${mapMaxComboVal}x` : '?x';
-            const comboText = `${score.max_combo || 0}x/${maxComboMapText}`;
-
-            // 6. Hits [300/100/50/Miss]
+            // 5. Thống kê Hits [300/100/50/Miss]
             const stats = score.statistics || {};
             const count300 = stats.count_300 ?? stats.great ?? 0;
             const count100 = stats.count_100 ?? stats.ok ?? 0;
@@ -53,8 +60,30 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const countmiss = stats.count_miss ?? stats.miss ?? 0;
             const hitsText = `[${count300}/${count100}/${count50}/${countmiss}m]`;
 
-            // 🎯 Định dạng lại chuỗi: Hiện tên sạch không dính wiki + Max Combo chuẩn
-            const replyMsg = `YUE: ${displayUser} | ${mapTitle}${modsText} | Rank: ${score.rank} > ${formattedScore} > PP ▸ ${ppText} > Combo: ${comboText} > Hits: ${hitsText}`;
+            // 6. Max Combo
+            const userCombo = score.max_combo || 0;
+            let realMapMaxCombo = beatmap?.max_combo;
+
+            if (!realMapMaxCombo && beatmap?.id) {
+                try {
+                    const apiKey = process.env.OSU_API_KEY;
+                    if (apiKey) {
+                        const bmRes = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${beatmap.id}`);
+                        const bmData = await bmRes.json();
+                        if (bmData && bmData.length > 0) {
+                            realMapMaxCombo = parseInt(bmData[0].max_combo);
+                        }
+                    }
+                } catch (e) {
+                    console.error('Lỗi fetch max_combo fallback:', e.message);
+                }
+            }
+
+            const maxComboMapText = realMapMaxCombo ? `${realMapMaxCombo}x` : '?x';
+            const comboText = `${userCombo}x/${maxComboMapText}`;
+
+            // 🎯 Chuỗi tin nhắn gọn gàng, an toàn tuyệt đối dưới 150 ký tự
+            const replyMsg = `YUE: ${displayUser} | ${mapTitle}${modsText} | Rank ${score.rank} > ${score.score.toLocaleString('en-US')} > ${ppText} | Combo: ${comboText} | Hits: ${hitsText}`;
 
             return await channel.sendMessage(replyMsg);
         } catch (err) {
@@ -64,12 +93,8 @@ export async function handlePlayerCommands(channel, message, args, command) {
     }
 }
 
-/**
- * Hàm đổi danh sách Mods từ API v2 thành dạng chuỗi (Ví dụ: +HRDT)
- */
 export function formatMods(modsArray) {
     if (!modsArray || modsArray.length === 0) return '';
-    // Lấy tên các mod dạng chữ viết tắt (HR, DT, HD, FL...)
     const modNames = modsArray.map(m => (typeof m === 'string' ? m : m.acronym)).join('');
     return modNames ? ` +${modNames}` : '';
 }

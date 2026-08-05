@@ -1,11 +1,11 @@
 import { forceJoinLobby, activeLobbies, initBancho } from '../../services/osu/banchoService.js';
 
-export async function handleRejoinCommand(message) {
+export async function handleJoinRoomCommand(message) {
     const args = message.content.trim().split(/ +/).slice(1);
     const matchId = args[0];
 
     if (!matchId) {
-        return message.reply('⚠️ Ông phải nhập Match ID nhé! Ví dụ: `.rejoin 121577509`');
+        return message.reply('⚠️ Ông phải nhập Match ID nhé! Ví dụ: `.jr 121577509` hoặc `.joinroom 121577509`');
     }
 
     await message.channel.sendTyping();
@@ -23,8 +23,8 @@ export async function handleRejoinCommand(message) {
             createdAt: Date.now()
         });
 
-        return message.reply(`✅ Yue đã join lại thành công vào phòng \`${channelName}\` rồi nhé!`);
+        return message.reply(`✅ Yue đã tham gia và kết nối thành công vào phòng \`${channelName}\` rồi nhé!`);
     } else {
-        return message.reply(`❌ Không thể join vào Match ID \`${matchId}\`. Kiểm tra xem Bancho có bị mất kết nối hoặc phòng còn tồn tại không nhé!`);
+        return message.reply(`❌ Không thể kết nối vào Match ID \`${matchId}\`. Kiểm tra xem Bancho có bị mất kết nối hoặc phòng còn tồn tại không nhé!`);
     }
 }
