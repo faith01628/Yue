@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { askYue } from './src/services/aiService.js';
+import { askYue, askYueWithVision } from './src/services/aiService.js';
 import { handleJoinCommand } from './src/commands/join.js';
 import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js';
@@ -9,6 +9,11 @@ import { handleMakeRoomCommand } from './src/commands/osu/makeRoomCommand.js';
 import { handleInviteCommand } from './src/commands/osu/inviteCommand.js';
 import { handleCloseMatchCommand } from './src/commands/osu/closeMatchCommand.js';
 import { handleJoinRoomCommand } from './src/commands/osu/joinRoomCommand.js';
+
+// 🧠 IMPORT BỘ NÃO & QUẢN LÝ BỘ NHỚ CỦA YUE
+import { buildContext } from './src/brain/contextBuilder.js';
+// import { parseIntent } from './src/brain/intentParserService.js';
+// import { processMemoryCandidate } from './src/brain/memoryManagerService.js';
 
 import {
     handleOsuProfileCommand,
@@ -86,21 +91,20 @@ client.on('messageCreate', async (message) => {
     }
 
     if (message.content.startsWith('.joinroom') || message.content.startsWith('!joinroom')) {
-        await handleJoinRoomCommand(message);
+        return await handleJoinRoomCommand(message);
     }
 
     // Kiểm tra .r có khoảng trắng phía sau hoặc chỉ duy nhất chữ .r
     if (
         content.startsWith('.rs') ||
         content.startsWith('.recent') ||
-        content.startsWith('.r ') || // Thêm khoảng trắng ở đây
+        content.startsWith('.r ') ||
         content === '.r' ||
         content.match(/^\.m\b/i)
     ) {
         return await handleOsuRecentCommand(message);
     }
 
-    
     if (content.startsWith('.top') || content.startsWith('.t')) {
         return await handleOsuTopCommand(message);
     }
@@ -108,17 +112,17 @@ client.on('messageCreate', async (message) => {
         return await handleOsuWhatIfCommand(message);
     }
 
-    // 🎯 LỆNH ĐÓNG PHÒNG MULTI (Đưa lên trước .c để không bị nuốt lệnh)
+    // 🎯 LỆNH ĐÓNG PHÒNG MULTI
     if (content.startsWith('.matchclose') || content.startsWith('.close') || content.startsWith('.mc')) {
         return await handleCloseMatchCommand(message);
     }
 
-    // 🎯 Lệnh Compare (Dùng regex \b để chỉ bắt chữ .c đơn lẻ, không bắt .cm / .close)
+    // 🎯 Lệnh Compare
     if (content.startsWith('.compare') || content.match(/^\.c\b/i)) {
         return await handleOsuCompareCommand(message);
     }
 
-    // 🎯 Lệnh Beatmap (Dùng regex \b để không bắt .mr / .make-room)
+    // 🎯 Lệnh Beatmap
     if (content.startsWith('.map') || content.match(/^\.m\b/i)) {
         return await handleOsuMapCommand(message);
     }
@@ -141,10 +145,8 @@ client.on('messageCreate', async (message) => {
         return await handleInviteCommand(message);
     }
 
-
-
     // ==========================================================
-    // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI
+    // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI AGENT (BRAIN INTEGRATION)
     // ==========================================================
     const isMentioned = message.mentions.has(client.user);
     const isSpecialChannel = message.channel.name === 'con-vợ-ai';
@@ -165,21 +167,44 @@ client.on('messageCreate', async (message) => {
                 .replace(`<@${client.user.id}>`, '')
                 .trim();
 
-            const hasAttachments = message.attachments.size > 0;
-            const hasEmbeds = message.embeds.length > 0;
+            const attachment = message.attachments.first();
+            const isImage = attachment && attachment.contentType?.startsWith('image/');
 
-            if (!userPrompt) {
-                if (hasAttachments || hasEmbeds) {
-                    userPrompt = "[Gửi một tệp đính kèm/hình ảnh/video/link]";
-                } else {
-                    return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
-                }
+            if (!userPrompt && !isImage) {
+                return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
             }
 
-            const userId = message.author.id;
-            const username = message.member?.displayName || message.author.username;
+            // 🧠 BƯỚC 1: DỰNG CONTEXT (4 LAYERS & RUNTIME PROFILE)
+            const runtimeContext = await buildContext(message, userPrompt);
 
-            const aiResponse = await askYue(userId, username, userPrompt, message);
+            // // 🧠 BƯỚC 2: PHÂN TÍCH Ý ĐỊNH BẰNG INTENT PARSER (XUẤT JSON)
+            // const parsedIntent = await parseIntent(userPrompt, runtimeContext);
+
+            // // 🧠 BƯỚC 3: ĐÁNH GIÁ VÀ LƯU KÝ ỨC QUA MEMORY MANAGER
+            // if (parsedIntent.memoryCandidate) {
+            //     processMemoryCandidate(message.author.id, parsedIntent.memoryCandidate);
+            // }
+
+            // 🧠 BƯỚC 4: REASONING ENGINE (TRẢ LỜI NGƯỜI DÙNG KÈM THEO KÝ ỨC)
+            let aiResponse = "";
+            if (isImage) {
+                aiResponse = await askYueWithVision(
+                    runtimeContext.user.discordId,
+                    runtimeContext.user.currentDisplayName,
+                    userPrompt,
+                    attachment.url,
+                    attachment.contentType
+                );
+            } else {
+                aiResponse = await askYue(
+                    runtimeContext.user.discordId,
+                    runtimeContext.user.currentDisplayName,
+                    userPrompt,
+                    message,
+                    runtimeContext // Truyền Context đã dựng lên AI Service
+                );
+            }
+
             await message.reply(aiResponse);
 
         } catch (error) {

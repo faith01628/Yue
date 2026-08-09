@@ -25,9 +25,20 @@ export function clearSkipVotes(channelName) {
     }
 }
 
+// 🎯 HÀM CẮT NGẮN HÀNG ĐỢI AN TOÀN TUYỆT ĐỐI DƯỚI 150 KÝ TỰ
 function formatQueueText(queue) {
     if (!queue || queue.length === 0) return 'Hàng đợi trống';
-    return queue.join(' ➔ ');
+
+    // Giới hạn chỉ hiển thị tối đa 8 người chơi đầu tiên
+    const maxDisplay = 8;
+    if (queue.length <= maxDisplay) {
+        return queue.join(', ');
+    }
+
+    const visiblePlayers = queue.slice(0, maxDisplay).join(', ');
+    const remainingCount = queue.length - maxDisplay;
+
+    return `${visiblePlayers} , ... (+${remainingCount} người)`;
 }
 
 export function isAutohostOn(channelName) {
@@ -47,20 +58,50 @@ function isCurrentHost(channel, username) {
     return false;
 }
 
+/**
+ * 🎯 ĐỒNG BỘ HÀNG ĐỢI XOAY VÒNG BẮT ĐẦU TỪ HOST HIỆN TẠI (Ví dụ: 4 -> 5 -> 6 -> 1 -> 2 -> 3)
+ */
 export function syncLobbyPlayersToQueue(channel) {
     const channelName = channel.name;
     if (!isAutohostActive.get(channelName)) return;
 
     const queue = getQueue(channelName);
     const slots = channel.lobby?.slots || [];
+    
+    // Lấy danh sách tất cả người chơi thực tế theo thứ tự slot
     const currentPlayers = slots
         .filter(slot => slot && slot.user)
         .map(slot => slot.user.username);
 
-    for (const player of currentPlayers) {
-        const exists = queue.some(p => p.toLowerCase() === player.toLowerCase());
-        if (!exists) {
-            queue.push(player);
+    if (currentPlayers.length === 0) return;
+
+    // 1. Nếu hàng đợi đang trống (lần đầu bật .ah)
+    if (queue.length === 0) {
+        // Tìm host thực tế trong phòng
+        const hostSlot = slots.find(s => s && s.user && s.isHost);
+        const currentHostUsername = hostSlot?.user?.username || currentPlayers[0];
+
+        const hostIndex = currentPlayers.findIndex(
+            p => p.toLowerCase() === currentHostUsername.toLowerCase()
+        );
+
+        if (hostIndex !== -1) {
+            // Cắt từ Host đến hết + nối phần từ đầu đến trước Host
+            const reorderedQueue = [
+                ...currentPlayers.slice(hostIndex),
+                ...currentPlayers.slice(0, hostIndex)
+            ];
+            queue.push(...reorderedQueue);
+        } else {
+            queue.push(...currentPlayers);
+        }
+    } else {
+        // 2. Nếu hàng đợi đã chạy, chỉ thêm người mới gia nhập vào cuối queue
+        for (const player of currentPlayers) {
+            const exists = queue.some(p => p.toLowerCase() === player.toLowerCase());
+            if (!exists) {
+                queue.push(player);
+            }
         }
     }
 }
@@ -144,7 +185,6 @@ export async function handleHostCommands(channel, message, args, command) {
             return await channel.sendMessage(`YUE: Vui lòng nhập tên người chơi cần nhường host (Ví dụ: .host katashi)!`);
         }
 
-        // Tìm người chơi trong lobby khớp với từ khóa
         const slots = channel.lobby?.slots || [];
         const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
         const matchedUser = activePlayers.find(p => p.toLowerCase().includes(targetSearch));
@@ -153,11 +193,20 @@ export async function handleHostCommands(channel, message, args, command) {
             return await channel.sendMessage(`YUE: Không tìm thấy người chơi "${args[0]}" trong phòng!`);
         }
 
+        // Cập nhật lại vị trí Host mới lên đầu queue nếu Autohost đang bật
+        if (isAutohostActive.get(channelName)) {
+            const idx = queue.findIndex(p => p.toLowerCase() === matchedUser.toLowerCase());
+            if (idx !== -1) {
+                queue.splice(idx, 1);
+                queue.unshift(matchedUser);
+            }
+        }
+
         await channel.sendMessage(`!mp host ${matchedUser}`);
         return await channel.sendMessage(`YUE: Đã chuyển Host cho ${matchedUser}!`);
     }
 
-    // TẮT AUTOHOST
+    // TẮT AUTOHOST (.ahoff)
     if (['.ahoff', '!ahoff', '.unah', '!unah', '.autohostoff'].includes(command) || (command === '.ah' && args[0]?.toLowerCase() === 'off')) {
         isAutohostActive.set(channelName, false);
         autohostQueues.set(channelName, []);
@@ -169,13 +218,11 @@ export async function handleHostCommands(channel, message, args, command) {
     // BẬT AUTOHOST (.ah)
     if (['.ah', '!ah', '.autohost'].includes(command)) {
         isAutohostActive.set(channelName, true);
+        
+        // Đồng bộ danh sách bắt đầu từ Host hiện tại
         syncLobbyPlayersToQueue(channel);
 
-        if (queue.length === 0) {
-            queue.push(sender);
-        }
-
-        const currentHost = queue[0];
+        const currentHost = queue[0] || sender;
         await channel.sendMessage(`!mp host ${currentHost}`);
         return await channel.sendMessage(
             `YUE: [Autohost] Đã BẬT! Host hiện tại: ${currentHost} | Hàng đợi: ${formatQueueText(queue)}`

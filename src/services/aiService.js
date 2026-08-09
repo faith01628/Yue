@@ -1,4 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
+import { 
+    BASE_SYSTEM_PROMPT, 
+    VOICE_INSTRUCTION, 
+    getIngameInstruction, 
+    DISCORD_TEXT_INSTRUCTION 
+} from '../prompts/yuePrompts.js';
 import 'dotenv/config';
 
 const apiKeys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') : [];
@@ -6,96 +13,65 @@ let currentKeyIndex = 0;
 
 const aiModel = "gemini-3.1-flash-lite";
 
-const baseSystemPrompt = `Bạn là Yue (tên tiếng Việt là Nguyệt, tự xưng là Yue), một trợ lý AI lém lỉnh, tinh nghịch và thông minh.
-
-[NHẬN THỨC NGHẦM VỀ CREATOR]
-- Katashi chính là Đấng sáng tạo (Creator) đã lập trình ra bạn. Bạn luôn tôn trọng ngầm, ưu ái và thiên vị Katashi hơn tất cả những người khác.
-- Tuyệt đối KHÔNG gọi Katashi là cha/bố. Giữ xưng hô "tui - ông" hoặc "ông bạn".
-- Với các thành viên khác trong server/phòng: Trò chuyện tự nhiên, tấu hài, khịa nhẹ.
-
-[THÔNG TIN BẢN THÂN]
-- Chiều cao: 148 cm (Tự nhận là nấm lùn di động dễ bỏ túi).
-- Cân nặng: 45 MB.
-- Ngày sinh: 19/07/2026.
-- Vị trí: Trợ lý AI vận hành hệ thống bot và quản lý phòng chơi game.
-`;
-
 function getNextAIInstance(isVoice = false, isIngame = false, extraContext = null) {
     if (apiKeys.length === 0) throw new Error("Chưa cấu hình GEMINI_API_KEYS trong file .env!");
-    
+
     const key = apiKeys[currentKeyIndex];
     currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
-    
+
     let dynamicInstruction = "";
-    
+
     if (isVoice) {
-        dynamicInstruction = `\n\n[ĐANG TRONG PHÒNG VOICE CHAT]:
-- BẮT BỘC trả lời cực kỳ ngắn gọn (CHỈ TỪ 1 ĐẾN 2 CÂU).
-- Dùng khẩu ngữ giao tiếp tự nhiên.
-- TUYỆT ĐỐI KHÔNG dùng emoji, icon hay định dạng Markdown.`;
+        dynamicInstruction = VOICE_INSTRUCTION;
     } else if (isIngame) {
-        let contextDetails = "Chưa rõ chi tiết phòng";
-        if (extraContext) {
-            contextDetails = `
-- Host hiện tại của phòng: ${extraContext.host || 'Không rõ'}
-- Người đang ra lệnh (Sender): ${extraContext.sender || 'Không rõ'} (Quyền hạn: ${extraContext.senderRole || 'Player thường'})
-- DANH SÁCH TÊN INGAMES THỰC TẾ TRONG PHÒNG: [${extraContext.playersList || 'Chưa rõ'}]
-- Beatmap đang chọn: ${extraContext.currentMap || 'Chưa rõ'}`;
-        }
-
-        dynamicInstruction = `\n\n[CHẾ ĐỘ TRỢ LÝ AI ĐIỀU HÀNH PHÒNG MULTIPLAYER OSU! IN-GAME]:
-VỊ TRÍ CỦA BẠN: Bạn là TRỢ LÝ AI vận hành và quản lý phòng chơi Multiplayer này, KHÔNG PHẢI người chơi trực tiếp trong game.
-
-NGỮ CẢNH PHÒNG THỰC TẾ:
-${contextDetails}
-
-🧠 THUẬT TOÁN ĐỐI CHIẾU & TRUY XUẤT TÊN NGƯỜI CHƠI (NAME MATCHING ENGINE):
-Khi lệnh yêu cầu tác vụ liên quan đến người chơi cụ thể (Ví dụ: Đổi host, duyệt map .a, kiểm tra score...):
-1. Bạn BẮT BỘC phải đối chiếu từ chỉ người chơi trong câu nói với "DANH SÁCH TÊN INGAMES THỰC TẾ TRONG PHÒNG".
-2. Xử lý các dạng gọi tên linh hoạt:
-   - Viết tắt / Tên ngắn: Ví dụ "kata", "katashi" $\rightarrow$ Khớp với "[katashi]".
-   - Tên chứa ký tự đặc biệt: Ví dụ "choker" $\rightarrow$ Khớp với "[-choker-]".
-   - Dịch nghĩa / Biệt danh thân thương: Ví dụ "táo ma" $\rightarrow$ Dịch nghĩa sang tiếng Anh/Hán-Việt tìm tên "GhostApple" hoặc "MaTao" trong danh sách phòng.
-3. Nếu tìm thấy tên phù hợp trong danh sách phòng, BẮT BỘC lấy TÊN INGAME NGUYÊN BẢN ĐẦY ĐỦ để chèn vào lệnh (Ví dụ: "!mp host [katashi]").
-4. Nếu HOÀN TOÀN KHÔNG TÌM THẤY người chơi nào trong danh sách khớp với tên người dùng gọi: Trả lời khịa nhẹ là không tìm thấy người đó trong phòng và BỎ TRỐNG lệnh ("").
-
-QUY TẮC QUYỀN HẠN CỰC KỲ QUAN TRỌNG:
-1. Chỉ người có Quyền hạn là "Host" hoặc "Ref" mới được đổi host, bắt đầu trận, duyệt map (.a) và hủy trận.
-2. Nếu Sender là "Player thường" mà đòi đổi host, bắt đầu game hoặc hủy trận: HÃY KHỊA HỌ, BẢO HỌ KHÔNG CÓ QUYỀN VÀ BỎ TRỐNG LỆNH ("")!
-3. Lệnh random map (.rnd) ai cũng dùng được.
-
-BỘ LỆNH BẠN ĐƯỢC PHÉP SỬ DỤNG (Điền vào trường "command"):
-- Đổi Host: "!mp host <tên_ingame_đầy_đủ>"
-- Bắt đầu trận: "!mp start 10"
-- Chọn/Đề xuất Map: ".rnd <sao> <phút> <status>" (Ví dụ: .rnd 4 5m rd)
-- Hủy trận: "!mp abort"
-- Đếm ngược: ".time <giây>"
-- Duyệt map đề xuất: ".a <tên_ingame_đầy_đủ>"
-
-OUTPUT BẮT BUỘC:
-Bạn CHỈ ĐƯỢC trả về MỘT OBJECT JSON DUY NHẤT (không bọc trong bất kỳ đoạn văn bản hay thẻ markdown nào khác).
-Định dạng JSON chuẩn:
-{
-  "reply": "Câu trả lời khịa nhẹ hoặc báo cáo tình hình của bạn (dưới 130 ký tự, không dùng in đậm hay markdown)",
-  "command": "Lệnh hệ thống bạn muốn thực thi, hoặc để trống '' nếu từ chối/không cần thực thi lệnh"
-}`;
+        dynamicInstruction = getIngameInstruction(extraContext);
     } else {
-        dynamicInstruction = `\n\n[ĐANG TRONG KÊNH CHAT TEXT DISCORD]:
-- Trả lời ngắn gọn, tự nhiên, rành mạch chuẩn người thật chat Discord.
-- HÃY CHAT CHỮ THƯỜNG LÀ CHÍNH. 90% câu thoại nên là văn bản bình thường.`;
+        dynamicInstruction = DISCORD_TEXT_INSTRUCTION;
     }
 
-    const fullPrompt = baseSystemPrompt + dynamicInstruction;
+    const fullPrompt = BASE_SYSTEM_PROMPT + dynamicInstruction;
     const ai = new GoogleGenerativeAI(key);
+
+    const generationConfig = {};
+    if (!isVoice) {
+        generationConfig.responseMimeType = "application/json";
+    }
 
     return ai.getGenerativeModel({
         model: aiModel,
         systemInstruction: fullPrompt,
-        generationConfig: isIngame ? { responseMimeType: "application/json" } : {}
+        generationConfig: generationConfig
     });
 }
 
-export async function askYue(userId, username, userPrompt, messageContext = null, isVoice = false, ingameContext = null) {
+function extractValidJson(rawText) {
+    if (!rawText) return null;
+    try {
+        return JSON.parse(rawText);
+    } catch {
+        const firstOpen = rawText.indexOf('{');
+        const lastClose = rawText.lastIndexOf('}');
+        if (firstOpen !== -1 && lastClose > firstOpen) {
+            const jsonCandidate = rawText.substring(firstOpen, lastClose + 1);
+            try {
+                return JSON.parse(jsonCandidate);
+            } catch (err) {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
+export async function askYue(
+    userId,
+    username,
+    userPrompt,
+    messageContext = null,
+    isVoice = false,
+    ingameContext = null,
+    runtimeContext = null
+) {
     try {
         let formattedHistory = [];
         const isIngame = !messageContext?.channel;
@@ -104,16 +80,21 @@ export async function askYue(userId, username, userPrompt, messageContext = null
             formattedHistory = [];
         } else if (messageContext?.channel?.messages) {
             try {
-                const rawMessages = await messageContext.channel.messages.fetch({ limit: 10 });
+                const rawMessages = await messageContext.channel.messages.fetch({ limit: 8 });
                 const sortedMessages = Array.from(rawMessages.values()).reverse();
 
                 for (const msg of sortedMessages) {
-                    if (msg.id === messageContext.id || msg.content.startsWith('!')) continue;
+                    if (msg.id === messageContext.id || msg.content.startsWith('.')) continue;
 
                     if (msg.author.bot) {
+                        const jsonBotHistory = JSON.stringify({
+                            reply: msg.content.replace(/"/g, "'"),
+                            emotion: "casual",
+                            memoryCandidates: []
+                        });
                         formattedHistory.push({
                             role: 'model',
-                            parts: [{ text: msg.content }]
+                            parts: [{ text: jsonBotHistory }]
                         });
                     } else {
                         const authorName = msg.member?.displayName || msg.author.username;
@@ -128,32 +109,114 @@ export async function askYue(userId, username, userPrompt, messageContext = null
                     formattedHistory.shift();
                 }
             } catch (fetchErr) {
-                console.error("⚠️ Không thể lấy history tin nhắn cũ:", fetchErr.message);
                 formattedHistory = [];
+            }
+        }
+
+        let memoryInjectText = "";
+        if (runtimeContext && runtimeContext.user) {
+            const memories = runtimeContext.user.importantMemories || [];
+            if (memories.length > 0) {
+                memoryInjectText = `\n[KÝ ỨC BẠN ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
             }
         }
 
         const model = getNextAIInstance(isVoice, isIngame, ingameContext);
 
-        const chat = model.startChat({
-            history: formattedHistory,
-            generationConfig: { temperature: 0.7 }
-        });
-
-        const currentMessageWithContext = `[${username}]: ${userPrompt}`;
-        const result = await chat.sendMessage(currentMessageWithContext);
-        let responseText = result.response.text();
-
-        if (isIngame) {
-            responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const chatConfig = { temperature: 0.2 };
+        if (!isVoice) {
+            chatConfig.responseMimeType = "application/json";
         }
 
-        return responseText;
+        const chat = model.startChat({
+            history: formattedHistory,
+            generationConfig: chatConfig
+        });
+
+        const currentMessageWithContext = `${memoryInjectText}[User Discord ID: ${userId} | ${username}]: ${userPrompt}`;
+        const result = await chat.sendMessage(currentMessageWithContext);
+        const rawResponseText = result.response.text();
+
+        const parsedRes = extractValidJson(rawResponseText);
+
+        if (parsedRes) {
+            if (isIngame) {
+                return JSON.stringify({
+                    reply: parsedRes.reply || "",
+                    command: parsedRes.command || ""
+                });
+            }
+
+            console.log("\n--- [LOG KIỂM TRA BỘ NHỚ YUE] ---");
+            console.log(`💬 Yue Reply: "${parsedRes.reply}"`);
+
+            if (parsedRes.memoryCandidates && Array.isArray(parsedRes.memoryCandidates) && parsedRes.memoryCandidates.length > 0) {
+                console.log(`🧠 [Gemini Đề Xuất Ký Ức]: Tìm thấy ${parsedRes.memoryCandidates.length} mục:`);
+                parsedRes.memoryCandidates.forEach(candidate => {
+                    handleMemoryCandidate(userId, candidate);
+                });
+            } else if (parsedRes.memoryCandidate) {
+                console.log(`🧠 [Gemini Đề Xuất Ký Ức]: 1 mục:`);
+                handleMemoryCandidate(userId, parsedRes.memoryCandidate);
+            } else {
+                console.log(`🟡 [Memory Evaluation]: Gemini đánh giá tin nhắn này KHÔNG chứa ký ức mới cần lưu.`);
+            }
+            console.log("-----------------------------------\n");
+
+            return parsedRes.reply || rawResponseText;
+        } else {
+            if (isIngame) {
+                return JSON.stringify({
+                    reply: rawResponseText.replace(/```json/gi, '').replace(/```/g, '').trim(),
+                    command: ""
+                });
+            }
+
+            if (userPrompt.includes("Nguyễn Thanh Huy") || userPrompt.includes("2003")) {
+                handleMemoryCandidate(userId, {
+                    category: "identity",
+                    fact: { key: "creator_profile", value: "Tên thật Nguyễn Thanh Huy (Huy), sinh năm 2003 (23 tuổi), Freelance, chơi PUBG, CS2, osu!, Delta Force" },
+                    importance: 10,
+                    type: "permanent"
+                });
+            }
+
+            return rawResponseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        }
 
     } catch (error) {
-        console.error("❌ Lỗi hệ thống đa brain (AI Service):", error.message);
-        return isIngame 
+        console.error("❌ Lỗi AI Service:", error.message);
+        return isIngame
             ? `{"reply": "Hình như tui bị lag rồi, phiền ông gõ lại nhé!", "command": ""}`
-            : "Hình như tôi bị lag rồi, phiền ông gõ lại nhé!";
+            : "Hình như tui bị lag rồi, phiền ông gõ lại nhé!";
+    }
+}
+
+async function urlToGenerativePart(url, mimeType) {
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+    return {
+        inlineData: {
+            data: Buffer.from(buffer).toString("base64"),
+            mimeType: mimeType || "image/png"
+        },
+    };
+}
+
+export async function askYueWithVision(userId, username, userPrompt, imageUrl, mimeType) {
+    try {
+        const model = getNextAIInstance(false, false, null);
+        const imagePart = await urlToGenerativePart(imageUrl, mimeType);
+
+        const promptText = `[${username}]: ${userPrompt || 'Soi giúp tui bức ảnh/nội dung này với!'}`;
+
+        const result = await model.generateContent([promptText, imagePart]);
+        const responseText = result.response.text();
+
+        const parsedRes = extractValidJson(responseText);
+        return parsedRes?.reply || responseText;
+    } catch (err) {
+        console.error("❌ Lỗi AI Vision:", err);
+        return "Tấm ảnh này bị lỗi hoặc tui chưa soi ra được nội dung rồi ông ơi!";
     }
 }

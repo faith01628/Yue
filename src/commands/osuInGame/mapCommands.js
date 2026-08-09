@@ -34,18 +34,22 @@ function addMapRequest(channelName, username, mapObject) {
     return list.length;
 }
 
-function formatShortTitle(title, maxLength = 30) {
+function formatShortTitle(title, maxLength = 25) {
     if (!title) return 'Map';
     if (title.length <= maxLength) return title;
     return title.substring(0, maxLength - 3).trim() + '...';
 }
 
 function buildDownloadLinks(beatmapSetId, beatmapId) {
-    const directLink = `osu://b/${beatmapId}`;
-    const minoLink = `https://catboy.best/d/${beatmapSetId}`;
-    const beatconnectLink = `https://beatconnect.io/b/${beatmapSetId}`;
+    const direct = `osu://b/${beatmapId}`;
+    const mirror = `https://osu.direct/d/${beatmapSetId}`;
+    const mino = `https://catboy.best/d/${beatmapSetId}`;
+    const neri = `https://nerinyan.moe/d/${beatmapSetId}`;
+    const btct = `https://beatconnect.io/b/${beatmapSetId}`;
+    const chimu = `https://chimu.moe/d/${beatmapSetId}`;
+    const sayo = `https://sayobot.cn/downloads?html=${beatmapSetId}`;
     
-    return `DL: [${directLink} Direct] | [${minoLink} Mino] | [${beatconnectLink} Beatconnect]`;
+    return `[${direct} Direct] | [${mirror} Mirror] | [${mino} Mino] | [${neri} Nerinyan] | [${btct} Beatconnect] | [${chimu} Chimu] | [${sayo} Sayobot]`;
 }
 
 function isCurrentHost(channel, username) {
@@ -63,7 +67,7 @@ function isCurrentHost(channel, username) {
 
 function parseRandomArgs(args) {
     let stars = null;
-    let maxDuration = 900; // Mặc định 15 phút
+    let maxDuration = 900;
     let statuses = [];
 
     args.forEach(arg => {
@@ -178,56 +182,112 @@ async function applyMapToRoom(channel, map) {
 
     await channel.sendMessage(`!mp map ${map.beatmap_id}`);
     
-    const shortTitle = formatShortTitle(map.title, 30);
+    const shortTitle = formatShortTitle(map.title, 25);
     const diffName = map.version ? ` [${map.version}]` : '';
     const mapWebUrl = `https://osu.ppy.sh/b/${map.beatmap_id}`;
     
     const mapTextWithLink = `[${mapWebUrl} ${shortTitle}${diffName}]`;
-    const dlLinks = buildDownloadLinks(map.beatmapset_id, map.beatmap_id);
 
     return await channel.sendMessage(
-        `YUE: Đã chọn map! ${mapTextWithLink} (${map.stars.toFixed(2)}★) | ${dlLinks}`
+        `YUE: Đã chọn map! ${mapTextWithLink} (${map.stars.toFixed(2)}★) | Gõ .map để xem thông tin & link tải!`
     );
 }
 
 export async function handleMapCommands(channel, message, args, command) {
     const channelName = channel.name;
     const sender = message.user?.username || 'Player';
+    const lowerCmd = command ? command.toLowerCase() : '';
 
-    if (command === '.abort' || command === '!abort') {
+    if (lowerCmd === '.abort' || lowerCmd === '!abort') {
         await channel.sendMessage(`!mp abort`);
         return await channel.sendMessage(`YUE: Đã hủy trận đấu!`);
     }
 
-    if (command === '.time' || command === '!time' || command === '.timer') {
+    if (lowerCmd === '.time' || lowerCmd === '!time' || lowerCmd === '.timer') {
         const seconds = parseInt(args[0]) || 30;
         await channel.sendMessage(`!mp timer ${seconds}`);
         return await channel.sendMessage(`YUE: Đã bật đếm ngược ${seconds} giây!`);
     }
 
-    if (['.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link'].includes(command)) {
-        const mapId = currentRoomMapId.get(channelName);
+    // 🎯 LỆNH .MAP VÀ .DL
+    if (['.map', '!map', '.m', '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link'].includes(lowerCmd)) {
+        let mapId = currentRoomMapId.get(channelName);
+
+        // Fallback: Nếu MapId chưa có trong RAM, tự lấy trực tiếp từ Object lobby của channel
+        if (!mapId && channel.lobby?.beatmapId) {
+            mapId = channel.lobby.beatmapId;
+            setRoomCurrentMap(channelName, mapId);
+        }
+
         if (!mapId) {
-            return await channel.sendMessage(`YUE: Chưa ghi nhận map nào trong phòng! Vui lòng chọn map trước.`);
+            console.log(`[MapCmd Debug] Room ${channelName} chưa ghi nhận được Map ID nào.`);
+            return await channel.sendMessage(`YUE: Chưa ghi nhận map nào trong phòng! Vui lòng pick/đổi map trước.`);
         }
 
         try {
             const apiKey = process.env.OSU_API_KEY;
-            const bmRes = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${mapId}`);
-            const bmData = await bmRes.json();
+            let bm = null;
 
-            if (bmData && bmData.length > 0) {
-                const setId = bmData[0].beatmapset_id;
-                const dlText = buildDownloadLinks(setId, mapId);
-                return await channel.sendMessage(`YUE: Link tải map hiện tại: ${dlText}`);
+            if (apiKey) {
+                const bmRes = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${mapId}`);
+                const bmData = await bmRes.json();
+                if (bmData && bmData.length > 0) bm = bmData[0];
+            }
+
+            if (!bm) {
+                const resRosu = await fetch(`https://catboy.best/api/v2/b/${mapId}`);
+                const dataRosu = await resRosu.json();
+                if (dataRosu && (dataRosu.id || dataRosu.beatmapset_id)) {
+                    bm = {
+                        beatmapset_id: dataRosu.beatmapset_id || dataRosu.beatmapset?.id || dataRosu.setId,
+                        title: dataRosu.title || dataRosu.beatmapset?.title || 'Beatmap',
+                        version: dataRosu.version || '',
+                        difficultyrating: dataRosu.difficulty_rating || dataRosu.stars || 0,
+                        diff_overall: dataRosu.accuracy || dataRosu.od || 8,
+                        diff_approach: dataRosu.ar || 9,
+                        diff_drain: dataRosu.hp || 6,
+                        diff_size: dataRosu.cs || 4,
+                        max_combo: dataRosu.max_combo || 0
+                    };
+                }
+            }
+
+            if (bm) {
+                const setId = bm.beatmapset_id;
+                const shortTitle = formatShortTitle(bm.title, 20);
+                const diffName = bm.version ? `[${bm.version}]` : '';
+                const stars = parseFloat(bm.difficultyrating || 0).toFixed(2);
+                const combo = bm.max_combo ? `${bm.max_combo}x` : '?x';
+
+                const ar = parseFloat(bm.diff_approach || 0).toFixed(1);
+                const od = parseFloat(bm.diff_overall || 0).toFixed(1);
+                const hp = parseFloat(bm.diff_drain || 0).toFixed(1);
+                const cs = parseFloat(bm.diff_size || 0).toFixed(1);
+
+                const baseStar = parseFloat(stars);
+                const estimatedSS = Math.round(Math.pow(baseStar, 3) * 2.8);
+                const estimated95 = Math.round(estimatedSS * 0.78);
+
+                const dlLinks = buildDownloadLinks(setId, mapId);
+
+                if (['.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link'].includes(lowerCmd)) {
+                    return await channel.sendMessage(`YUE DL: ${dlLinks}`);
+                }
+
+                const infoLine = `YUE MAP: ${shortTitle} ${diffName} (${stars}★) | SS: ${estimatedSS}pp | 95%: ${estimated95}pp | AR${ar} OD${od} HP${hp} CS${cs} | Combo: ${combo}`;
+                const linkLine = `YUE DL: ${dlLinks}`;
+
+                await channel.sendMessage(infoLine);
+                await new Promise(resolve => setTimeout(resolve, 300));
+                return await channel.sendMessage(linkLine);
             }
         } catch (e) {
-            console.error('Lỗi lấy link download:', e);
+            console.error('Lỗi lấy thông tin lệnh .map/.dl:', e.message);
         }
-        return await channel.sendMessage(`YUE: Không lấy được link tải cho map #${mapId}!`);
+        return await channel.sendMessage(`YUE: Không lấy được thông tin/link tải cho map #${mapId}!`);
     }
 
-    if (['.rnd', '!rnd', '.random', '!random'].includes(command)) {
+    if (['.rnd', '!rnd', '.random', '!random'].includes(lowerCmd)) {
         const options = parseRandomArgs(args);
         const starInfo = options.stars ? `~${options.stars}★` : 'ngẫu nhiên★';
         
@@ -252,7 +312,7 @@ export async function handleMapCommands(channel, message, args, command) {
         );
     }
 
-    if (['.a', '!a', '.accept', '!accept'].includes(command)) {
+    if (['.a', '!a', '.accept', '!accept'].includes(lowerCmd)) {
         if (!isCurrentHost(channel, sender) && !isUserRef(channelName, sender)) {
             return await channel.sendMessage(`YUE: Chỉ Host hoặc Ref mới có quyền duyệt map (.a)!`);
         }
