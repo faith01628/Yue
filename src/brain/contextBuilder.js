@@ -1,4 +1,5 @@
 import { memoryProvider } from './MemoryProvider.js';
+import { selectRelevantMemories } from './memoryManagerService.js';
 
 export async function buildContext(message, rawText) {
     const discordId = message.author.id;
@@ -11,8 +12,9 @@ export async function buildContext(message, rawText) {
     }
 
     const userData = memoryProvider.getUser(discordId);
-    // 🎯 Sửa: Dùng getRelevantKnowledge và lấy m.fact.value
-    const relevantMemories = memoryProvider.getRelevantKnowledge(discordId, guildId, discordId);
+    
+    // 🎯 Lấy ký ức hợp lệ, tự động gia hạn khi được truy xuất và gắn nhãn tầng ký ức (VĨNH VIỄN, TRUNG HẠN, NGẮN HẠN)
+    const formattedMemories = selectRelevantMemories(discordId, discordId, guildId);
 
     return {
         environment: guildId === 'DM' ? 'DirectMessage' : 'DiscordGuild',
@@ -22,7 +24,7 @@ export async function buildContext(message, rawText) {
             identity: userData.identity,
             profile: userData.profile,
             guildProfile: userData.guilds[guildId] || null,
-            importantMemories: relevantMemories.map(m => `[${m.category.toUpperCase()}] ${m.fact.value}`)
+            importantMemories: formattedMemories
         },
         input: {
             rawText: rawText,

@@ -1,66 +1,61 @@
 import { memoryProvider } from './MemoryProvider.js';
 
-const memoryQueue = new Map();
-
+/**
+ * Xử lý đánh giá và lưu trữ ký ức đề xuất từ AI (Gemini).
+ * Phân chia chuẩn 3 cấp độ:
+ * 1. Vĩnh viễn (Permanent): Thông tin cá nhân, lịch sử, tên thật, ngày sinh... (Importance >= 8)
+ * 2. Trung hạn (Medium): Sự kiện, kế hoạch, câu chuyện cá nhân khá quan trọng (~60 ngày) (Importance 5-7)
+ * 3. Ngắn hạn (Ephemeral): Thông tin ngoài lề, sinh hoạt ngắn hạn (vài ngày) (Importance 1-4)
+ */
 export function handleMemoryCandidate(discordId, candidate) {
-    if (!candidate || !candidate.fact || !candidate.fact.value) {
+    if (!candidate || !candidate.fact || (!candidate.fact.value && typeof candidate.fact !== 'string')) {
         console.log(`⚠️ [Memory Manager]: Bỏ qua candidate do rỗng hoặc thiếu thông tin fact.`);
-        return;
+        return null;
     }
 
-    const key = `${discordId}_${candidate.fact.key}`;
-    const importance = candidate.importance || 5;
+    const factKey = candidate.fact.key || 'general_info';
+    const factValue = candidate.fact.value || candidate.fact;
+    const importance = Number(candidate.importance) || 5;
+    let type = candidate.type || 'ephemeral';
 
-    console.log(`   📌 [Đánh Giá Ký Ức]: Key="${candidate.fact.key}" | Value="${candidate.fact.value}" | Importance=${importance}/10 | Type="${candidate.type || 'ephemeral'}"`);
-
-    // 1. Ký ức quan trọng cao (Importance >= 8) -> Lưu vĩnh viễn trực tiếp vào đĩa
-    if (importance >= 8) {
-        memoryProvider.addKnowledge(discordId, {
-            ...candidate,
-            type: 'permanent'
-        });
-        console.log(`      💾 -> Kết quả: ĐÃ GHI TRỰC TIẾP VÀO ĐĨA VĨNH VIỄN (Importance >= 8)`);
-        return;
-    }
-
-    // 2. Ký ức được củng cố khi nhắc lại trong 10 phút
-    if (memoryQueue.has(key)) {
-        const pending = memoryQueue.get(key);
-        
-        memoryProvider.addKnowledge(discordId, {
-            ...candidate,
-            importance: Math.min(10, pending.importance + 2),
-            type: candidate.importance >= 6 ? 'medium' : 'ephemeral',
-            durationDays: candidate.durationDays || 3
-        });
-        
-        memoryQueue.delete(key);
-        console.log(`      ✅ -> Kết quả: CỦNG CỐ THÀNH CÔNG! Đã chuyển từ RAM xuống đĩa sớm.`);
-        return;
-    }
-
-    // 3. Ký ức vừa phải (3 <= Importance < 8) -> Đưa vào RAM Queue chờ 10 phút
-    if (importance >= 3) {
-        memoryQueue.set(key, candidate);
-        console.log(`      ⏳ -> Kết quả: ĐÃ ĐƯA VÀO RAM QUEUE (Chờ 10 phút đếm ngược để hạ đĩa)`);
-
-        setTimeout(() => {
-            if (memoryQueue.has(key)) {
-                const item = memoryQueue.get(key);
-                
-                memoryProvider.addKnowledge(discordId, {
-                    ...item,
-                    type: item.type || 'ephemeral',
-                    durationDays: item.durationDays || 1
-                });
-
-                memoryQueue.delete(key);
-                console.log(`\n💾 [Memory Queue Execution]: Hết 10 phút! Đã chuyển ký ức tạm từ RAM xuống đĩa (24h/30ngày): "${item.fact.value}"`);
-            }
-        }, 10 * 60 * 1000);
+    // Xác định phân tầng dựa trên độ quan trọng và type
+    if (importance >= 8 || type === 'permanent') {
+        type = 'permanent';
+    } else if (importance >= 5 || type === 'medium') {
+        type = 'medium';
     } else {
-        console.log(`      🚫 -> Kết quả: BỎ QUA do điểm quan trọng quá thấp (${importance} < 3).`);
+        type = 'ephemeral';
     }
+
+    console.log(`\n🧠 [ĐÁNH GIÁ KÝ ỨC YUE] User: ${discordId}`);
+    console.log(`   📌 Key: "${factKey}" | Value: "${factValue}"`);
+    console.log(`   ⭐ Importance: ${importance}/10 | Tier: ${type.toUpperCase()}`);
+
+    if (importance < 2) {
+        console.log(`   🚫 Kết quả: Bỏ qua do mức độ quan trọng quá thấp (${importance} < 2).`);
+        return null;
+    }
+
+    // Ghi đĩa lập tức (chống mất dữ liệu khi restart bot và sẵn sàng cho lượt chat kế tiếp)
+    const savedEntity = memoryProvider.addKnowledge(discordId, {
+        category: candidate.category || 'general',
+        fact: {
+            key: factKey,
+            value: factValue
+        },
+        importance: importance,
+        type: type,
+        durationDays: candidate.durationDays || (type === 'medium' ? 60 : (type === 'ephemeral' ? 3 : null))
+    });
+
+    const tierLabels = {
+        permanent: '💾 VĨNH VIỄN (Lịch sử / Thông tin cá nhân)',
+        medium: '⏳ TRUNG HẠN (~60 ngày / 2 tháng)',
+        ephemeral: '⏱️ NGẮN HẠN (Vài ngày - Tự xóa)'
+    };
+
+    console.log(`   ✅ Kết quả: ĐÃ LƯU TRỰC TIẾP VÀO ĐĨA -> ${tierLabels[type] || type}`);
+    return savedEntity;
 }
 
 export function selectRelevantMemories(targetUserId, requestingUserId, currentGuildId) {
@@ -70,5 +65,8 @@ export function selectRelevantMemories(targetUserId, requestingUserId, currentGu
         memoryProvider.reinforceMemory(targetUserId, mem.id);
     });
 
-    return rawMemories.map(m => `[${m.category.toUpperCase()}] ${m.fact.value}`);
+    return rawMemories.map(m => {
+        const tag = m.type === 'permanent' ? 'VĨNH VIỄN' : (m.type === 'medium' ? 'TRUNG HẠN' : 'NGẮN HẠN');
+        return `[${tag}][${(m.category || 'INFO').toUpperCase()}] ${m.fact?.value || m.fact}`;
+    });
 }
