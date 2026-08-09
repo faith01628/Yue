@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+.agents/
+tests/
 
 # Environment variables
 .env

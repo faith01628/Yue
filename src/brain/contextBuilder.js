@@ -28,8 +28,8 @@ export async function buildContext(message, rawText) {
         },
         input: {
             rawText: rawText,
-            hasImage: message.attachments?.size > 0,
-            imageUrl: message.attachments?.first()?.url || null
+            hasImage: Boolean(message.attachments && (message.attachments.size > 0 || message.attachments.length > 0)),
+            imageUrl: message.attachments?.first ? message.attachments.first()?.url : (message.attachments?.values ? message.attachments.values().next()?.value?.url : null)
         }
     };
 }
