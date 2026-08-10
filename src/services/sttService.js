@@ -215,10 +215,10 @@ export function listenToUser(connection, userId, username, textChannel) {
 
                 const aiResponse = await askYue(uid, currentUsername, resultText, mockMessageContext, true);
 
-                const resource = await getVoiceResource(aiResponse);
+                const resource = getVoiceResource(aiResponse);
                 if (resource) {
                     session.player.play(resource);
-                    console.log(`🔊 [Voice Playback - Server ${guildId}] Đã phát giọng nói Hoài My (+20%)!`);
+                    console.log(`🔊 [Voice Playback - Server ${guildId}] Phát giọng thoại siêu tốc (< 250ms)!`);
                 }
 
             } catch (error) {
