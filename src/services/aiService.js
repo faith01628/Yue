@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
+import { filterCleanHistory, updateTopicSummary } from '../brain/conversationContextService.js';
 import { 
     BASE_SYSTEM_PROMPT, 
     VOICE_INSTRUCTION, 
@@ -72,53 +73,52 @@ export async function askYue(
     ingameContext = null,
     runtimeContext = null
 ) {
+    // 🛡️ BẢO VỆ THAM SỐ: Nếu isVoice truyền vào dạng Object (do nhầm vị trí tham số với runtimeContext)
+    if (typeof isVoice === 'object' && isVoice !== null) {
+        runtimeContext = isVoice;
+        isVoice = false;
+    }
+
     try {
         let formattedHistory = [];
+        let pendingUserText = "";
         const isIngame = !messageContext?.channel;
+        const channelId = messageContext?.channel?.id;
 
         if (isVoice || isIngame) {
             formattedHistory = [];
         } else if (messageContext?.channel?.messages) {
             try {
-                const rawMessages = await messageContext.channel.messages.fetch({ limit: 8 });
-                const sortedMessages = Array.from(rawMessages.values()).reverse();
+                // 🚀 LẤY TỚI 40 TIN NHẮN GẦN NHẤT từ Discord channel để lưu ngữ cảnh chat sâu rộng
+                const rawMessages = await messageContext.channel.messages.fetch({ limit: 40 });
+                const sortedMessages = Array.from(rawMessages.values()).reverse().filter(m => m.id !== messageContext.id);
 
-                for (const msg of sortedMessages) {
-                    if (msg.id === messageContext.id || msg.content.startsWith('.')) continue;
-
-                    if (msg.author.bot) {
-                        const jsonBotHistory = JSON.stringify({
-                            reply: msg.content.replace(/"/g, "'"),
-                            emotion: "casual",
-                            memoryCandidates: []
-                        });
-                        formattedHistory.push({
-                            role: 'model',
-                            parts: [{ text: jsonBotHistory }]
-                        });
-                    } else {
-                        const authorName = msg.member?.displayName || msg.author.username;
-                        formattedHistory.push({
-                            role: 'user',
-                            parts: [{ text: `[${authorName}]: ${msg.content}` }]
-                        });
-                    }
-                }
-
-                while (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
-                    formattedHistory.shift();
-                }
+                // 🧹 Dùng filterCleanHistory gộp thoại & lọc lịch sử chất lượng cao
+                const cleanedResult = filterCleanHistory(sortedMessages, messageContext.client?.user?.id);
+                formattedHistory = cleanedResult.history || [];
+                pendingUserText = cleanedResult.pendingUserText || "";
             } catch (fetchErr) {
+                console.error("❌ Lỗi lấy lịch sử chat Discord:", fetchErr.message);
                 formattedHistory = [];
             }
+        }
+
+        let contextHeader = "";
+        if (runtimeContext?.topicSummary) {
+            contextHeader += `\n[CHỦ ĐỀ ĐANG NÓI HIỆN TẠI TRONG KÊNH]: ${runtimeContext.topicSummary}\n`;
         }
 
         let memoryInjectText = "";
         if (runtimeContext && runtimeContext.user) {
             const memories = runtimeContext.user.importantMemories || [];
             if (memories.length > 0) {
-                memoryInjectText = `\n[KÝ ỨC BẠN ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
+                memoryInjectText = `\n[KÝ ỨC ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
             }
+        }
+
+        let pendingContextText = "";
+        if (pendingUserText) {
+            pendingContextText = `\n[CÁC CÂU NÓI TRƯỚC ĐÓ CỦA USER CHƯA ĐƯỢC PHẢN HỒI]:\n${pendingUserText}\n`;
         }
 
         const model = getNextAIInstance(isVoice, isIngame, ingameContext);
@@ -133,11 +133,16 @@ export async function askYue(
             generationConfig: chatConfig
         });
 
-        const currentMessageWithContext = `${memoryInjectText}[User Discord ID: ${userId} | ${username}]: ${userPrompt}`;
+        const currentMessageWithContext = `${contextHeader}${memoryInjectText}${pendingContextText}[User Discord ID: ${userId} | ${username}]: ${userPrompt}`;
         const result = await chat.sendMessage(currentMessageWithContext);
         const rawResponseText = result.response.text();
 
         const parsedRes = extractValidJson(rawResponseText);
+
+        const replyText = parsedRes?.reply || rawResponseText;
+        if (channelId) {
+            updateTopicSummary(channelId, userPrompt, replyText);
+        }
 
         if (parsedRes) {
             if (isIngame) {

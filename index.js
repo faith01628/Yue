@@ -201,7 +201,9 @@ client.on('messageCreate', async (message) => {
                     runtimeContext.user.currentDisplayName,
                     userPrompt,
                     message,
-                    runtimeContext // Truyền Context đã dựng lên AI Service
+                    false,          // isVoice
+                    null,           // ingameContext
+                    runtimeContext  // runtimeContext
                 );
             }
 
