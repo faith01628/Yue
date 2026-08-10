@@ -16,7 +16,7 @@ const SPAM_PATTERNS = [
  * 🧹 LỌC NHIỄU & GỘP LỊCH SỬ CHAT DISCORD SÂU (TỐI ĐA 30-40 TIN NHẮN)
  * Returns { history: Array, pendingUserText: string }
  */
-export function filterCleanHistory(rawMessages, botUserId, maxTurns = 24) {
+export function filterCleanHistory(rawMessages, botUserId, maxTurns = 40) {
     if (!rawMessages || rawMessages.length === 0) {
         return { history: [], pendingUserText: '' };
     }
@@ -25,7 +25,7 @@ export function filterCleanHistory(rawMessages, botUserId, maxTurns = 24) {
 
     for (const msg of rawMessages) {
         const content = msg.content ? msg.content.trim() : '';
-        const hasAttachment = Boolean(msg.attachments && (msg.attachments.size > 0 || msg.attachments.length > 0));
+        const hasAttachment = Boolean(msg.hasAttachment) || Boolean(msg.attachments && (msg.attachments.size > 0 || msg.attachments.length > 0));
 
         // 1. Bỏ qua tin nhắn trống không có ảnh
         if (!content && !hasAttachment) continue;
@@ -36,8 +36,8 @@ export function filterCleanHistory(rawMessages, botUserId, maxTurns = 24) {
         // 3. Bỏ qua các tin nhắn spam cực ngắn không chứa thông tin (ngoại trừ có ảnh)
         if (!hasAttachment && SPAM_PATTERNS.some(pattern => pattern.test(content))) continue;
 
-        const authorName = msg.member?.displayName || msg.author?.username || 'User';
-        const isBot = msg.author?.id === botUserId || msg.author?.bot;
+        const authorName = msg.authorName || msg.member?.displayName || msg.author?.username || 'User';
+        const isBot = msg.isBot !== undefined ? Boolean(msg.isBot) : (msg.author?.id === botUserId || Boolean(msg.author?.bot));
         const role = isBot ? 'model' : 'user';
 
         let formattedLine = '';

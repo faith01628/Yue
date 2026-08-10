@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
 import { filterCleanHistory, updateTopicSummary } from '../brain/conversationContextService.js';
+import { getLocalChannelHistory, saveYueReplyToLocalHistory } from './chatHistoryManager.js';
 import { 
     BASE_SYSTEM_PROMPT, 
     VOICE_INSTRUCTION, 
@@ -87,18 +88,27 @@ export async function askYue(
 
         if (isVoice || isIngame) {
             formattedHistory = [];
-        } else if (messageContext?.channel?.messages) {
+        } else if (channelId) {
             try {
-                // 🚀 LẤY TỚI 40 TIN NHẮN GẦN NHẤT từ Discord channel để lưu ngữ cảnh chat sâu rộng
-                const rawMessages = await messageContext.channel.messages.fetch({ limit: 40 });
-                const sortedMessages = Array.from(rawMessages.values()).reverse().filter(m => m.id !== messageContext.id);
+                // 1. Đọc bộ đệm lịch sử local từ chatHistoryManager (tối đa 80 tin nhắn mới nhất)
+                let rawHistory = getLocalChannelHistory(channelId, 80);
+
+                // 2. Nếu file local chưa có (lần đầu chat), fetch 80 tin nhắn từ Discord API làm bộ đệm
+                if (rawHistory.length === 0 && messageContext?.channel?.messages) {
+                    try {
+                        const rawMessages = await messageContext.channel.messages.fetch({ limit: 80 });
+                        rawHistory = Array.from(rawMessages.values()).reverse().filter(m => m.id !== messageContext.id);
+                    } catch (fetchErr) {
+                        console.error("❌ Lỗi fetch lịch sử từ Discord API:", fetchErr.message);
+                    }
+                }
 
                 // 🧹 Dùng filterCleanHistory gộp thoại & lọc lịch sử chất lượng cao
-                const cleanedResult = filterCleanHistory(sortedMessages, messageContext.client?.user?.id);
+                const cleanedResult = filterCleanHistory(rawHistory, messageContext?.client?.user?.id);
                 formattedHistory = cleanedResult.history || [];
                 pendingUserText = cleanedResult.pendingUserText || "";
-            } catch (fetchErr) {
-                console.error("❌ Lỗi lấy lịch sử chat Discord:", fetchErr.message);
+            } catch (err) {
+                console.error("❌ Lỗi xử lý lịch sử kênh:", err.message);
                 formattedHistory = [];
             }
         }

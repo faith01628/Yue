@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import { askYue, askYueWithVision } from './src/services/aiService.js';
+import { saveMessageToLocalHistory, saveYueReplyToLocalHistory } from './src/services/chatHistoryManager.js';
 import { handleJoinCommand } from './src/commands/join.js';
 import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js';
@@ -174,6 +175,16 @@ client.on('messageCreate', async (message) => {
                 return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
             }
 
+            // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL
+            saveMessageToLocalHistory(message.channel.id, {
+                authorId: message.author.id,
+                authorName: message.member?.displayName || message.author.username,
+                content: userPrompt,
+                isBot: false,
+                hasAttachment: Boolean(isImage),
+                timestamp: message.createdTimestamp
+            });
+
             // 🧠 BƯỚC 1: DỰNG CONTEXT (4 LAYERS & RUNTIME PROFILE)
             const runtimeContext = await buildContext(message, userPrompt);
 
@@ -206,6 +217,9 @@ client.on('messageCreate', async (message) => {
                     runtimeContext  // runtimeContext
                 );
             }
+
+            // 💾 LƯU PHẢN HỒI CỦA YUE VÀO BỘ ĐỆM LỊCH SỬ LOCAL
+            saveYueReplyToLocalHistory(message.channel.id, aiResponse);
 
             await message.reply(aiResponse);
 
