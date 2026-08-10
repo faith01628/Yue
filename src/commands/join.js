@@ -1,17 +1,6 @@
-import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from '@discordjs/voice';
+import { joinVoiceChannel } from '@discordjs/voice';
 import { listenToUser } from '../services/sttService.js';
 import { checkVoiceChannelState } from '../services/voiceAutoLeaveService.js';
-
-// Khởi tạo bộ phát âm thanh dùng chung cho phòng Voice
-const player = createAudioPlayer();
-
-player.on(AudioPlayerStatus.Playing, () => {
-    console.log('🔊 Yue AI đang phát giọng nói vào phòng thoại.');
-});
-
-player.on('error', error => {
-    console.error(`❌ Lỗi bộ phát âm thanh (Audio Player): ${error.message}`);
-});
 
 /**
  * Xử lý lệnh cho Bot tham gia vào phòng Voice và bắt đầu nghe-nói
@@ -34,18 +23,15 @@ export async function handleJoinCommand(message) {
             selfMute: false  // BẮT BUỘC bằng false để Bot không bị câm (mới gáy được)
         });
 
-        // 3. Đăng ký bộ phát âm thanh vào đường kết nối này
-        connection.subscribe(player);
-        
         message.reply(`Yue đã nhảy vào phòng Voice **${voiceChannel.name}** rồi nha! Đang mở tai lắng nghe đây... 🎙️`);
 
         const userId = message.author.id;
         const username = message.author.username;
 
-        // 4. Kích hoạt tính năng "màng nhĩ" lắng nghe riêng bạn trong phòng thoại
-        listenToUser(connection, userId, username, player, message.channel);
+        // 3. Kích hoạt tính năng "màng nhĩ" lắng nghe riêng cho Server này
+        listenToUser(connection, userId, username, message.channel);
 
-        // 5. Kiểm tra sĩ số phòng voice để khởi chạy bộ hẹn giờ 5 phút tự out nếu phòng trống
+        // 4. Kiểm tra sĩ số phòng voice để khởi chạy bộ hẹn giờ 5 phút tự out nếu phòng trống
         checkVoiceChannelState(voiceChannel.guild, voiceChannel.id, message.channel);
 
     } catch (error) {

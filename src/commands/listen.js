@@ -13,7 +13,7 @@ export async function handleListenCommand(interaction) {
     }
 
     const username = member.displayName || member.user.username;
-    const added = registerSpeaker(member.id, username);
+    const added = registerSpeaker(interaction.guild.id, member.id, username);
 
     const replyContent = added 
         ? `✅ Đã bật chế độ lắng nghe cho **${username}**! Giờ ông có thể gọi "Nguyệt ơi" được rồi nhé.`
