@@ -1,5 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from '@discordjs/voice';
 import { listenToUser } from '../services/sttService.js';
+import { checkVoiceChannelState } from '../services/voiceAutoLeaveService.js';
 
 // Khởi tạo bộ phát âm thanh dùng chung cho phòng Voice
 const player = createAudioPlayer();
@@ -43,6 +44,9 @@ export async function handleJoinCommand(message) {
 
         // 4. Kích hoạt tính năng "màng nhĩ" lắng nghe riêng bạn trong phòng thoại
         listenToUser(connection, userId, username, player, message.channel);
+
+        // 5. Kiểm tra sĩ số phòng voice để khởi chạy bộ hẹn giờ 5 phút tự out nếu phòng trống
+        checkVoiceChannelState(voiceChannel.guild, voiceChannel.id, message.channel);
 
     } catch (error) {
         console.error("❌ Lỗi khi kết nối phòng Voice:", error);

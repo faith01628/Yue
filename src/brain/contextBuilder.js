@@ -1,6 +1,7 @@
 import { memoryProvider } from './MemoryProvider.js';
 import { selectRelevantMemories } from './memoryManagerService.js';
 import { getTopicSummary } from './conversationContextService.js';
+import { extractMediaFromMessage } from '../services/aiService.js';
 
 export async function buildContext(message, rawText) {
     const discordId = message.author.id;
@@ -18,6 +19,8 @@ export async function buildContext(message, rawText) {
     // 🎯 Lấy ký ức hợp lệ, tự động gia hạn khi được truy xuất và gắn nhãn tầng ký ức (VĨNH VIỄN, TRUNG HẠN, NGẮN HẠN)
     const formattedMemories = selectRelevantMemories(discordId, discordId, guildId);
     const topicSummary = getTopicSummary(channelId);
+    const affectionData = memoryProvider.getAffection(discordId);
+    const mediaData = await extractMediaFromMessage(message);
 
     return {
         environment: guildId === 'DM' ? 'DirectMessage' : 'DiscordGuild',
@@ -26,14 +29,15 @@ export async function buildContext(message, rawText) {
             currentDisplayName: currentDisplayName,
             identity: userData.identity,
             profile: userData.profile,
+            affection: affectionData,
             guildProfile: userData.guilds[guildId] || null,
             importantMemories: formattedMemories
         },
         topicSummary: topicSummary,
         input: {
             rawText: rawText,
-            hasImage: Boolean(message.attachments && (message.attachments.size > 0 || message.attachments.length > 0)),
-            imageUrl: message.attachments?.first ? message.attachments.first()?.url : (message.attachments?.values ? message.attachments.values().next()?.value?.url : null)
+            hasImage: Boolean(mediaData),
+            imageUrl: mediaData?.url || null
         }
     };
 }

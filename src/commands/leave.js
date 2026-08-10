@@ -1,4 +1,5 @@
 import { getVoiceConnection } from '@discordjs/voice';
+import { cancelAutoLeave } from '../services/voiceAutoLeaveService.js';
 
 /**
  * Xử lý lệnh cho Bot rời khỏi phòng Voice
@@ -10,6 +11,7 @@ export async function handleLeaveCommand(message) {
 
     // 2. Nếu Bot đang ở trong phòng Voice, tiến hành ngắt kết nối
     if (connection) {
+        cancelAutoLeave(message.guild.id);
         connection.destroy(); // Đá Bot ra khỏi phòng thoại và xóa luồng âm thanh
         return message.reply("Hứ, không chơi với ông nữa, tui đi đây! 🙄💨");
     } else {

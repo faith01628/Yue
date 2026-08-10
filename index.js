@@ -1,5 +1,7 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { askYue, askYueWithVision } from './src/services/aiService.js';
+import { getVoiceConnection } from '@discordjs/voice';
+import { askYue, askYueWithVision, extractMediaFromMessage } from './src/services/aiService.js';
+import { checkVoiceChannelState } from './src/services/voiceAutoLeaveService.js';
 import { saveMessageToLocalHistory, saveYueReplyToLocalHistory } from './src/services/chatHistoryManager.js';
 import { handleJoinCommand } from './src/commands/join.js';
 import { handleLeaveCommand } from './src/commands/leave.js';
@@ -168,8 +170,8 @@ client.on('messageCreate', async (message) => {
                 .replace(`<@${client.user.id}>`, '')
                 .trim();
 
-            const attachment = message.attachments.first();
-            const isImage = attachment && attachment.contentType?.startsWith('image/');
+            const mediaData = await extractMediaFromMessage(message);
+            const isImage = Boolean(mediaData);
 
             if (!userPrompt && !isImage) {
                 return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
@@ -203,8 +205,8 @@ client.on('messageCreate', async (message) => {
                     runtimeContext.user.discordId,
                     runtimeContext.user.currentDisplayName,
                     userPrompt,
-                    attachment.url,
-                    attachment.contentType
+                    mediaData.url,
+                    mediaData.mimeType
                 );
             } else {
                 aiResponse = await askYue(
@@ -227,6 +229,22 @@ client.on('messageCreate', async (message) => {
             console.error("❌ Lỗi xử lý AI ở index:", error);
             await message.reply("Huhu, đầu tui đang bị quá tải rồi... 💥");
         }
+    }
+});
+
+// ==========================================================
+// ⚡ 4. XỬ LÝ SỰ KIỆN NGUỜI DÙNG RA/VÀO PHÒNG VOICE (AUTO LEAVE 5 PHÚT)
+// ==========================================================
+client.on('voiceStateUpdate', (oldState, newState) => {
+    const guild = oldState.guild || newState.guild;
+    if (!guild) return;
+
+    const connection = getVoiceConnection(guild.id);
+    if (!connection) return;
+
+    const botChannelId = connection.joinConfig.channelId;
+    if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
+        checkVoiceChannelState(guild, botChannelId);
     }
 });
 

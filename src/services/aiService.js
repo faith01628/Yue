@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
 import { filterCleanHistory, updateTopicSummary } from '../brain/conversationContextService.js';
 import { getLocalChannelHistory, saveYueReplyToLocalHistory } from './chatHistoryManager.js';
+import { memoryProvider } from '../brain/MemoryProvider.js';
 import { 
     BASE_SYSTEM_PROMPT, 
     VOICE_INSTRUCTION, 
@@ -121,8 +122,14 @@ export async function askYue(
         let memoryInjectText = "";
         if (runtimeContext && runtimeContext.user) {
             const memories = runtimeContext.user.importantMemories || [];
-            if (memories.length > 0) {
-                memoryInjectText = `\n[KÝ ỨC ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
+            const aff = runtimeContext.user.affection;
+            let affText = "";
+            if (aff) {
+                affText = `[MỨC HẢO CẢM CỦA USER NÀY: ${aff.score}/100000 EXP - CẤP ĐỘ: ${aff.level}]\n- Hướng dẫn thái độ phản ứng: ${aff.description}\n`;
+            }
+
+            if (memories.length > 0 || affText) {
+                memoryInjectText = `\n${affText}[KÝ ỨC ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
             }
         }
 
@@ -143,7 +150,10 @@ export async function askYue(
             generationConfig: chatConfig
         });
 
-        const currentMessageWithContext = `${contextHeader}${memoryInjectText}${pendingContextText}[User Discord ID: ${userId} | ${username}]: ${userPrompt}`;
+        const isCreator = String(userId) === '756427625970270248' || String(username).toLowerCase().includes('katashi');
+        const creatorTag = isCreator ? ' [Creator/Chủ nhân]' : '';
+
+        const currentMessageWithContext = `${contextHeader}${memoryInjectText}${pendingContextText}[User Discord ID: ${userId} | ${username}${creatorTag}]: ${userPrompt}`;
         const result = await chat.sendMessage(currentMessageWithContext);
         const rawResponseText = result.response.text();
 
@@ -162,21 +172,35 @@ export async function askYue(
                 });
             }
 
-            console.log("\n--- [LOG KIỂM TRA BỘ NHỚ YUE] ---");
-            console.log(`💬 Yue Reply: "${parsedRes.reply}"`);
-
-            if (parsedRes.memoryCandidates && Array.isArray(parsedRes.memoryCandidates) && parsedRes.memoryCandidates.length > 0) {
-                console.log(`🧠 [Gemini Đề Xuất Ký Ức]: Tìm thấy ${parsedRes.memoryCandidates.length} mục:`);
-                parsedRes.memoryCandidates.forEach(candidate => {
-                    handleMemoryCandidate(userId, candidate);
-                });
-            } else if (parsedRes.memoryCandidate) {
-                console.log(`🧠 [Gemini Đề Xuất Ký Ức]: 1 mục:`);
-                handleMemoryCandidate(userId, parsedRes.memoryCandidate);
+            // 1. Process affection delta
+            let affText = "";
+            if (typeof parsedRes.affectionDelta === 'number' && parsedRes.affectionDelta !== 0) {
+                const tierResult = memoryProvider.updateAffection(userId, parsedRes.affectionDelta);
+                if (tierResult) {
+                    affText = `💖 ${tierResult.score} (${tierResult.level} | ${parsedRes.affectionDelta >= 0 ? '+' : ''}${parsedRes.affectionDelta})`;
+                }
             } else {
-                console.log(`🟡 [Memory Evaluation]: Gemini đánh giá tin nhắn này KHÔNG chứa ký ức mới cần lưu.`);
+                const currentAff = memoryProvider.getAffection(userId);
+                affText = `💖 ${currentAff.score} (${currentAff.level})`;
             }
-            console.log("-----------------------------------\n");
+
+            // 2. Process memory candidates
+            let savedMemories = [];
+            if (parsedRes.memoryCandidates && Array.isArray(parsedRes.memoryCandidates) && parsedRes.memoryCandidates.length > 0) {
+                savedMemories = parsedRes.memoryCandidates.map(c => handleMemoryCandidate(userId, c)).filter(Boolean);
+            } else if (parsedRes.memoryCandidate) {
+                const saved = handleMemoryCandidate(userId, parsedRes.memoryCandidate);
+                if (saved) savedMemories.push(saved);
+            }
+
+            const memText = savedMemories.length > 0
+                ? `🧠 Lưu Ký Ức: ${savedMemories.join(' | ')}`
+                : `🧠 Ký Ức: Không lưu mới`;
+
+            const replyPreview = (parsedRes.reply || rawResponseText).replace(/\r?\n/g, ' ').slice(0, 55);
+
+            // 💬 COMPACT 1-LINE LOG PER TURN
+            console.log(`💬 [Yue AI] User: ${username} | ${affText} | ${memText} | Reply: "${replyPreview}..."`);
 
             return parsedRes.reply || rawResponseText;
         } else {
@@ -207,13 +231,86 @@ export async function askYue(
     }
 }
 
+export async function extractMediaFromMessage(message) {
+    if (!message) return null;
+
+    // 1. Check direct file attachments (standard file upload)
+    const attachment = message.attachments?.first ? message.attachments.first() : null;
+    if (attachment && attachment.contentType?.startsWith('image/')) {
+        return {
+            url: attachment.url,
+            mimeType: attachment.contentType
+        };
+    }
+
+    // 2. Check Discord Embeds (Discord GIF picker Tenor/Giphy or link embeds)
+    if (message.embeds && message.embeds.length > 0) {
+        for (const embed of message.embeds) {
+            const mediaUrl = embed.image?.url || embed.thumbnail?.url || (embed.type === 'gifv' || embed.type === 'image' ? embed.url : null);
+            if (mediaUrl) {
+                const lower = mediaUrl.toLowerCase();
+                let mimeType = 'image/png';
+                if (lower.includes('.gif') || lower.includes('tenor.com') || lower.includes('giphy.com')) mimeType = 'image/gif';
+                else if (lower.includes('.webp')) mimeType = 'image/webp';
+                else if (lower.includes('.jpg') || lower.includes('.jpeg')) mimeType = 'image/jpeg';
+
+                return {
+                    url: mediaUrl,
+                    mimeType: mimeType
+                };
+            }
+        }
+    }
+
+    // 3. Check image/gif URL strings in message content
+    const urlRegex = /(https?:\/\/[^\s]+(?:\.(?:gif|png|jpg|jpeg|webp))|https?:\/\/(?:media\.)?tenor\.com\/[^\s]+|https?:\/\/media\d?\.giphy\.com\/[^\s]+)/gi;
+    const matches = message.content?.match(urlRegex);
+    if (matches && matches.length > 0) {
+        let rawUrl = matches[0];
+        
+        // Resolve Tenor view URL to direct gif link if embeds are missing
+        if (rawUrl.includes('tenor.com/view')) {
+            try {
+                const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                const html = await res.text();
+                const ogMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) || html.match(/<meta\s+content="([^"]+)"\s+property="og:image"/i);
+                if (ogMatch && ogMatch[1]) {
+                    rawUrl = ogMatch[1];
+                }
+            } catch (e) {
+                console.warn("⚠️ Không thể giải mã link Tenor:", e.message);
+            }
+        }
+
+        const lower = rawUrl.toLowerCase();
+        let mimeType = 'image/png';
+        if (lower.includes('.gif') || lower.includes('tenor') || lower.includes('giphy')) mimeType = 'image/gif';
+        else if (lower.includes('.webp')) mimeType = 'image/webp';
+        else if (lower.includes('.jpg') || lower.includes('.jpeg')) mimeType = 'image/jpeg';
+
+        return {
+            url: rawUrl,
+            mimeType: mimeType
+        };
+    }
+
+    return null;
+}
+
 async function urlToGenerativePart(url, mimeType) {
     const response = await fetch(url);
+    const contentType = response.headers.get('content-type');
     const buffer = await response.arrayBuffer();
+
+    let finalMime = mimeType || "image/gif";
+    if (contentType && contentType.startsWith('image/')) {
+        finalMime = contentType.split(';')[0].trim().toLowerCase();
+    }
+
     return {
         inlineData: {
             data: Buffer.from(buffer).toString("base64"),
-            mimeType: mimeType || "image/png"
+            mimeType: finalMime
         },
     };
 }
@@ -223,7 +320,10 @@ export async function askYueWithVision(userId, username, userPrompt, imageUrl, m
         const model = getNextAIInstance(false, false, null);
         const imagePart = await urlToGenerativePart(imageUrl, mimeType);
 
-        const promptText = `[${username}]: ${userPrompt || 'Soi giúp tui bức ảnh/nội dung này với!'}`;
+        // Clean raw URLs from userPrompt so Gemini doesn't get confused by URL text
+        const cleanPromptText = (userPrompt || '').replace(/(https?:\/\/[^\s]+)/gi, '').trim();
+
+        const promptText = `[User ID: ${userId} | ${username}]: ${cleanPromptText || 'Soi giúp tui bức ảnh/GIF này xem có gì hài hước hoặc có nội dung gì với!'}`;
 
         const result = await model.generateContent([promptText, imagePart]);
         const responseText = result.response.text();
@@ -232,6 +332,6 @@ export async function askYueWithVision(userId, username, userPrompt, imageUrl, m
         return parsedRes?.reply || responseText;
     } catch (err) {
         console.error("❌ Lỗi AI Vision:", err);
-        return "Tấm ảnh này bị lỗi hoặc tui chưa soi ra được nội dung rồi ông ơi!";
+        return "Tấm ảnh/GIF này bị lỗi hoặc tui chưa soi ra được nội dung rồi ông ơi!";
     }
 }

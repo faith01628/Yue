@@ -9,7 +9,6 @@ import { memoryProvider } from './MemoryProvider.js';
  */
 export function handleMemoryCandidate(discordId, candidate) {
     if (!candidate || !candidate.fact || (!candidate.fact.value && typeof candidate.fact !== 'string')) {
-        console.log(`⚠️ [Memory Manager]: Bỏ qua candidate do rỗng hoặc thiếu thông tin fact.`);
         return null;
     }
 
@@ -18,7 +17,6 @@ export function handleMemoryCandidate(discordId, candidate) {
     const importance = Number(candidate.importance) || 5;
     let type = candidate.type || 'ephemeral';
 
-    // Xác định phân tầng dựa trên độ quan trọng và type
     if (importance >= 8 || type === 'permanent') {
         type = 'permanent';
     } else if (importance >= 5 || type === 'medium') {
@@ -27,17 +25,11 @@ export function handleMemoryCandidate(discordId, candidate) {
         type = 'ephemeral';
     }
 
-    console.log(`\n🧠 [ĐÁNH GIÁ KÝ ỨC YUE] User: ${discordId}`);
-    console.log(`   📌 Key: "${factKey}" | Value: "${factValue}"`);
-    console.log(`   ⭐ Importance: ${importance}/10 | Tier: ${type.toUpperCase()}`);
-
     if (importance < 2) {
-        console.log(`   🚫 Kết quả: Bỏ qua do mức độ quan trọng quá thấp (${importance} < 2).`);
         return null;
     }
 
-    // Ghi đĩa lập tức (chống mất dữ liệu khi restart bot và sẵn sàng cho lượt chat kế tiếp)
-    const savedEntity = memoryProvider.addKnowledge(discordId, {
+    memoryProvider.addKnowledge(discordId, {
         category: candidate.category || 'general',
         fact: {
             key: factKey,
@@ -48,14 +40,7 @@ export function handleMemoryCandidate(discordId, candidate) {
         durationDays: candidate.durationDays || (type === 'medium' ? 60 : (type === 'ephemeral' ? 3 : null))
     });
 
-    const tierLabels = {
-        permanent: '💾 VĨNH VIỄN (Lịch sử / Thông tin cá nhân)',
-        medium: '⏳ TRUNG HẠN (~60 ngày / 2 tháng)',
-        ephemeral: '⏱️ NGẮN HẠN (Vài ngày - Tự xóa)'
-    };
-
-    console.log(`   ✅ Kết quả: ĐÃ LƯU TRỰC TIẾP VÀO ĐĨA -> ${tierLabels[type] || type}`);
-    return savedEntity;
+    return `"${factValue}" (${type.toUpperCase()})`;
 }
 
 export function selectRelevantMemories(targetUserId, requestingUserId, currentGuildId) {

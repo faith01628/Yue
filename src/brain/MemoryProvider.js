@@ -51,7 +51,6 @@ export class MemoryProvider {
         }
 
         if (updated) {
-            console.log(`🧹 [Memory GC]: Đã tự động dọn dẹp các ký ức hết hạn của user ${discordId}`);
             this._write(db);
         }
     }
@@ -152,10 +151,8 @@ export class MemoryProvider {
             // Reset thời gian sống nếu ký ức có hạn
             if (memory.type === 'medium') {
                 memory.expiresAt = now + 60 * DAY_IN_MS; // Reset đủ 60 ngày
-                console.log(`🔄 [Memory Reinforce]: Ký ức trung hạn "${memory.fact.value}" được củng cố (Reset 60 ngày).`);
             } else if (memory.type === 'ephemeral' || memory.type === 'shortTerm') {
                 memory.expiresAt = now + 3 * DAY_IN_MS; // Reset đủ 3 ngày
-                console.log(`🔄 [Memory Reinforce]: Ký ức ngắn hạn "${memory.fact.value}" được củng cố (Reset 3 ngày).`);
             }
 
             this._write(db);
@@ -166,7 +163,7 @@ export class MemoryProvider {
     getRelevantKnowledge(discordId, currentGuildId, requestingUserId) {
         this.cleanExpiredMemories(discordId);
         const user = this.getUser(discordId);
-        
+
         const isOwnerAsking = discordId === requestingUserId;
         const allMemories = [
             ...(user.memories.permanent || []).map(m => ({ ...m, tier: 'permanent' })),
@@ -201,7 +198,7 @@ export class MemoryProvider {
         if (!db[discordId]) {
             db[discordId] = {
                 identity: { discordId, osuId: null, createdAt: Date.now(), language: 'vi' },
-                profile: { preferences: {}, relationshipLevel: "neutral" },
+                profile: { preferences: {}, relationshipLevel: "Mới Quen", affectionScore: 1000 },
                 guilds: {},
                 memories: {
                     permanent: [],
@@ -211,8 +208,18 @@ export class MemoryProvider {
             };
             this._write(db);
         }
-        
+
         // Ensure structure upgrade fallback
+        if (!db[discordId].profile) {
+            db[discordId].profile = { preferences: {}, relationshipLevel: "Mới Quen", affectionScore: 1000 };
+            this._write(db);
+        }
+        if (typeof db[discordId].profile.affectionScore !== 'number') {
+            db[discordId].profile.affectionScore = String(discordId) === '756427625970270248' ? 100000 : 1000;
+            db[discordId].profile.relationshipLevel = this.getAffectionTier(db[discordId].profile.affectionScore).level;
+            this._write(db);
+        }
+
         if (!db[discordId].memories) {
             db[discordId].memories = { permanent: [], medium: [], shortTerm: [] };
             this._write(db);
@@ -222,6 +229,55 @@ export class MemoryProvider {
         if (!db[discordId].memories.shortTerm) db[discordId].memories.shortTerm = [];
 
         return db[discordId];
+    }
+
+    getAffection(discordId) {
+        const user = this.getUser(discordId);
+        if (String(discordId) === '756427625970270248') {
+            return { score: 100000, level: 'Tri Kỷ (Creator)', description: 'Chủ nhân sáng tạo ra Yue' };
+        }
+        const score = typeof user.profile?.affectionScore === 'number' ? user.profile.affectionScore : 1000;
+        return this.getAffectionTier(score);
+    }
+
+    getAffectionTier(score) {
+        if (score >= 100000) {
+            return { score, level: 'Tri Kỷ / Siêu Thân Thiết', description: 'Cạ cứng ruột, cực kỳ tin tưởng, hết mình trợ giúp, trêu yêu ngọt ngào' };
+        } else if (score >= 50000) {
+            return { score, level: 'Bạn Thân Cao Cấp', description: 'Rất thân thiết, chia sẻ tâm sự, rủ rê chơi game cực kỳ thoải mái' };
+        } else if (score >= 20000) {
+            return { score, level: 'Bạn Thân', description: 'Vui vẻ, hay trêu ghẹo tấu hài, rủ rê chơi game thoải mái' };
+        } else if (score >= 1000) {
+            return { score, level: 'Bạn Bình Thường', description: 'Lịch sự, hài hước nhẹ nhàng chuẩn gamer Discord' };
+        } else if (score >= 0) {
+            return { score, level: 'Mới Quen', description: 'Trả lời xã giao, chảnh chảnh nhẹ kiểu Neuro-sama' };
+        } else {
+            return { score, level: 'Ghét / Khó Ưa', description: 'Nói chuyện đắng cay khó ưa nhẹ, đáp phũ phàng (đang gỡ điểm thì đáp cọc nhẹ)' };
+        }
+    }
+
+    updateAffection(discordId, delta) {
+        if (!discordId || delta === undefined || delta === 0) return null;
+        const db = this._read();
+        const user = this.getUser(discordId);
+
+        if (!user.profile) user.profile = {};
+        const isCreator = String(discordId) === '756427625970270248';
+        const currentScore = typeof user.profile.affectionScore === 'number' 
+            ? user.profile.affectionScore 
+            : (isCreator ? 100000 : 1000);
+
+        const rawScore = currentScore + Number(delta);
+        const newScore = isCreator ? 100000 : Math.round(Math.max(-99999, Math.min(200000, rawScore)) * 10) / 10;
+
+        user.profile.affectionScore = newScore;
+        const tier = this.getAffectionTier(newScore);
+        user.profile.relationshipLevel = tier.level;
+
+        db[discordId] = user;
+        this._write(db);
+
+        return tier;
     }
 }
 
