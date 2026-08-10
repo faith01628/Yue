@@ -45,6 +45,24 @@ function isCurrentHost(channel, username) {
     return false;
 }
 
+const lastAutoStartMap = new Map();
+
+async function triggerAutoStart(channel) {
+    try {
+        const channelName = channel.name;
+        const now = Date.now();
+        const lastStart = lastAutoStartMap.get(channelName) || 0;
+        if (now - lastStart < 10000) return; // Cooldown 10 giây để chống spam start
+
+        lastAutoStartMap.set(channelName, now);
+        console.log(`[AutoStart Tracker] 🚀 Phát hiện tất cả người chơi trong ${channelName} đã Ready!`);
+        await channel.sendMessage("YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...");
+        await channel.sendMessage("!mp start 10");
+    } catch (err) {
+        console.error('[AutoStart Error]:', err.message);
+    }
+}
+
 function attachLobbyEvents(channel) {
     const lobby = channel.lobby;
     if (!lobby) return;
@@ -61,16 +79,7 @@ function attachLobbyEvents(channel) {
     });
 
     lobby.on("allPlayersReady", async () => {
-        try {
-            const slots = lobby.slots?.filter(s => s && s.user) || [];
-            if (slots.length === 0) return;
-
-            console.log(`[AutoStart] Tất cả người chơi trong ${channel.name} đã Ready hợp lệ!`);
-            await channel.sendMessage("YUE: Mọi người đã Ready hết rồi nè! Đếm ngược 10s bắt đầu nha...");
-            await channel.sendMessage("!mp start 10");
-        } catch (err) {
-            console.error('[AutoStart Error]:', err.message);
-        }
+        await triggerAutoStart(channel);
     });
 
     lobby.on("playerJoined", (obj) => {
@@ -198,6 +207,12 @@ async function handleInGameChat(message) {
         // 🎯 XỬ LÝ SỰ KIỆN TỪ BANCHOBOT
         if (senderUsername.toLowerCase() === 'banchobot') {
             const lowerContent = content.toLowerCase();
+
+            // Bắt sự kiện tất cả người chơi đã Ready từ BanchoBot chat
+            if (lowerContent.includes('all players are ready') || lowerContent.includes('all players ready')) {
+                await triggerAutoStart(channel);
+                return;
+            }
 
             // Tối ưu bắt ID Beatmap từ tin nhắn BanchoBot
             if (lowerContent.includes('changed beatmap to') || lowerContent.includes('beatmap changed to') || lowerContent.includes('selected:')) {
