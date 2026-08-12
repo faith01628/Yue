@@ -159,8 +159,67 @@ export class MemoryProvider {
         }
     }
 
-    // LẤY GỘP TOÀN BỘ KÝ ỨC HỢP LỆ (Đã tự dọn rác)
-    getRelevantKnowledge(discordId, currentGuildId, requestingUserId) {
+    // 🙈 ĐÁNH DẤU TẠM ẨN / QUÊN CHỦ ĐỘNG (SUPPRESS MEMORY)
+    suppressMemory(discordId, factKey) {
+        const db = this._read();
+        const user = db[discordId];
+        if (!user || !user.memories) return false;
+
+        const normalizedKey = factKey.toLowerCase().trim();
+        let found = false;
+
+        ['permanent', 'medium', 'shortTerm'].forEach(tier => {
+            if (user.memories[tier]) {
+                user.memories[tier].forEach(m => {
+                    const keyMatch = m.fact?.key?.toLowerCase() === normalizedKey;
+                    const valMatch = typeof m.fact?.value === 'string' && m.fact.value.toLowerCase().includes(normalizedKey);
+                    if (keyMatch || valMatch || m.id === factKey) {
+                        m.isSuppressed = true;
+                        m.suppressedAt = Date.now();
+                        found = true;
+                    }
+                });
+            }
+        });
+
+        if (found) {
+            this._write(db);
+        }
+        return found;
+    }
+
+    // 👁️ KHÔI PHỤC KÝ ỨC BỊ ẨN (UNSUPPRESS MEMORY)
+    unsuppressMemory(discordId, factKey) {
+        const db = this._read();
+        const user = db[discordId];
+        if (!user || !user.memories) return false;
+
+        const normalizedKey = factKey.toLowerCase().trim();
+        let found = false;
+
+        ['permanent', 'medium', 'shortTerm'].forEach(tier => {
+            if (user.memories[tier]) {
+                user.memories[tier].forEach(m => {
+                    const keyMatch = m.fact?.key?.toLowerCase() === normalizedKey;
+                    const valMatch = typeof m.fact?.value === 'string' && m.fact.value.toLowerCase().includes(normalizedKey);
+                    if (keyMatch || valMatch || m.id === factKey) {
+                        m.isSuppressed = false;
+                        delete m.suppressedAt;
+                        found = true;
+                    }
+                });
+            }
+        });
+
+        if (found) {
+            this._write(db);
+        }
+        return found;
+    }
+
+    // LẤY GỘP TOÀN BỘ KÝ ỨC HỢP LỆ (Đã tự dọn rác & lọc ký ức suppressed)
+    getRelevantKnowledge(discordId, currentGuildId, requestingUserId, options = {}) {
+        const { includeSuppressed = false, query = null } = typeof options === 'object' ? options : {};
         this.cleanExpiredMemories(discordId);
         const user = this.getUser(discordId);
 
@@ -172,9 +231,24 @@ export class MemoryProvider {
         ];
 
         return allMemories.filter(mem => {
-            if (isOwnerAsking) return true;
-            if (mem.visibility === 'private') return false;
-            return mem.visibility === 'guild_shared' || mem.visibility === 'public';
+            if (!isOwnerAsking && mem.visibility === 'private') return false;
+            if (!isOwnerAsking && mem.visibility !== 'guild_shared' && mem.visibility !== 'public') return false;
+
+            // 🙈 Nếu ký ức bị tạm ẩn/quên theo yêu cầu người dùng
+            if (mem.isSuppressed) {
+                if (includeSuppressed) return true;
+                if (query) {
+                    const q = query.toLowerCase().trim();
+                    const keyMatch = mem.fact?.key?.toLowerCase().includes(q);
+                    const valMatch = typeof mem.fact?.value === 'string' && mem.fact.value.toLowerCase().includes(q);
+                    const catMatch = mem.category?.toLowerCase().includes(q);
+                    return keyMatch || valMatch || catMatch;
+                }
+                // Mặc định KHÔNG đưa ký ức suppressed vào gợi ý chủ động
+                return false;
+            }
+
+            return true;
         });
     }
 
@@ -247,9 +321,9 @@ export class MemoryProvider {
             return { score, level: 'Bạn Thân Cao Cấp', description: 'Rất thân thiết, chia sẻ tâm sự, rủ rê chơi game cực kỳ thoải mái' };
         } else if (score >= 20000) {
             return { score, level: 'Bạn Thân', description: 'Vui vẻ, hay trêu ghẹo tấu hài, rủ rê chơi game thoải mái' };
-        } else if (score >= 1000) {
+        } else if (score >= 5000) {
             return { score, level: 'Bạn Bình Thường', description: 'Lịch sự, hài hước nhẹ nhàng chuẩn gamer Discord' };
-        } else if (score >= 0) {
+        } else if (score >= 1000) {
             return { score, level: 'Mới Quen', description: 'Trả lời xã giao, chảnh chảnh nhẹ kiểu Neuro-sama' };
         } else {
             return { score, level: 'Ghét / Khó Ưa', description: 'Nói chuyện đắng cay khó ưa nhẹ, đáp phũ phàng (đang gỡ điểm thì đáp cọc nhẹ)' };
@@ -263,8 +337,8 @@ export class MemoryProvider {
 
         if (!user.profile) user.profile = {};
         const isCreator = String(discordId) === '756427625970270248';
-        const currentScore = typeof user.profile.affectionScore === 'number' 
-            ? user.profile.affectionScore 
+        const currentScore = typeof user.profile.affectionScore === 'number'
+            ? user.profile.affectionScore
             : (isCreator ? 100000 : 1000);
 
         const rawScore = currentScore + Number(delta);

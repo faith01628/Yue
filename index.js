@@ -2,7 +2,7 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { getVoiceConnection } from '@discordjs/voice';
 import { askYue, askYueWithVision, extractMediaFromMessage } from './src/services/aiService.js';
 import { checkVoiceChannelState } from './src/services/voiceAutoLeaveService.js';
-import { saveMessageToLocalHistory, saveYueReplyToLocalHistory } from './src/services/chatHistoryManager.js';
+import { saveMessageToLocalHistory, saveYueReplyToLocalHistory, getConsecutiveGifCount } from './src/services/chatHistoryManager.js';
 import { handleJoinCommand } from './src/commands/join.js';
 import { handleLeaveCommand } from './src/commands/leave.js';
 import { handleInfoCommand } from './src/commands/info.js';
@@ -154,65 +154,86 @@ client.on('messageCreate', async (message) => {
     const isMentioned = message.mentions.has(client.user);
     const isSpecialChannel = message.channel.name === 'con-vợ-ai';
 
+    // 1. Trích xuất media & nội dung tin nhắn
+    let userPrompt = message.content
+        .replace(`<@!${client.user.id}>`, '')
+        .replace(`<@${client.user.id}>`, '')
+        .trim();
+
+    const mediaData = await extractMediaFromMessage(message);
+    const isImage = Boolean(mediaData);
+
+    // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL (Lưu tất cả tin nhắn trong kênh để giữ đúng ngữ cảnh đối thoại)
+    saveMessageToLocalHistory(message.channel.id, {
+        authorId: message.author.id,
+        authorName: message.member?.displayName || message.author.username,
+        content: userPrompt || message.content,
+        isBot: false,
+        hasAttachment: isImage,
+        timestamp: message.createdTimestamp
+    });
+
+    // 2. Xử lý Reply Reference (Trả lời tin nhắn người dùng khác)
+    let repliedContextText = "";
+    let isReplyToOtherUserWithoutMention = false;
+
+    if (message.reference && message.reference.messageId) {
+        try {
+            const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+            const isReplyingToYue = repliedMessage.author.id === client.user.id;
+
+            if (!isReplyingToYue && !isMentioned) {
+                // Người dùng rep tin nhắn của người khác và KHÔNG tag Yue -> Đã lưu history ở trên, dừng không trả lời AI
+                isReplyToOtherUserWithoutMention = true;
+            } else if (!isReplyingToYue && isMentioned) {
+                // Người dùng rep tin nhắn của người khác VÀ CÓ tag @yue -> Trích xuất tin nhắn của người được rep làm ngữ cảnh
+                const targetAuthorName = repliedMessage.member?.displayName || repliedMessage.author.username;
+                const cleanRepliedContent = (repliedMessage.content || '').replace(/\r?\n/g, ' ').slice(0, 100);
+                repliedContextText = `[ĐANG REP TIN NHẮN CỦA ${targetAuthorName}: "${cleanRepliedContent}"]\n`;
+            }
+        } catch (fetchErr) {
+            console.warn("⚠️ Không thể fetch nội dung tin nhắn reply reference:", fetchErr.message);
+        }
+    }
+
+    if (isReplyToOtherUserWithoutMention) {
+        return;
+    }
+
     if (isMentioned || isSpecialChannel) {
         try {
-            if (message.reference && message.reference.messageId) {
-                const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
-                if (repliedMessage.author.id !== client.user.id) {
-                    return;
-                }
-            }
-
             await message.channel.sendTyping();
-
-            let userPrompt = message.content
-                .replace(`<@!${client.user.id}>`, '')
-                .replace(`<@${client.user.id}>`, '')
-                .trim();
-
-            const mediaData = await extractMediaFromMessage(message);
-            const isImage = Boolean(mediaData);
 
             if (!userPrompt && !isImage) {
                 return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
             }
 
-            // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL
-            saveMessageToLocalHistory(message.channel.id, {
-                authorId: message.author.id,
-                authorName: message.member?.displayName || message.author.username,
-                content: userPrompt,
-                isBot: false,
-                hasAttachment: Boolean(isImage),
-                timestamp: message.createdTimestamp
-            });
+            // Gắn ngữ cảnh rep tin nhắn (nếu có) vào prompt người dùng
+            const fullUserPromptWithReply = `${repliedContextText}${userPrompt}`.trim();
 
             // 🧠 BƯỚC 1: DỰNG CONTEXT (4 LAYERS & RUNTIME PROFILE)
-            const runtimeContext = await buildContext(message, userPrompt);
+            const runtimeContext = await buildContext(message, fullUserPromptWithReply);
 
-            // // 🧠 BƯỚC 2: PHÂN TÍCH Ý ĐỊNH BẰNG INTENT PARSER (XUẤT JSON)
-            // const parsedIntent = await parseIntent(userPrompt, runtimeContext);
+            // 🧠 BƯỚC 2: KIỂM TRA MỨC ĐỘ SPAM GIF LIÊN TỤC CỦA USER NÀY
+            const consecutiveGifCount = getConsecutiveGifCount(message.channel.id, message.author.id);
+            const isGifSpam = isImage && consecutiveGifCount >= 3 && (!userPrompt || userPrompt.length < 15);
 
-            // // 🧠 BƯỚC 3: ĐÁNH GIÁ VÀ LƯU KÝ ỨC QUA MEMORY MANAGER
-            // if (parsedIntent.memoryCandidate) {
-            //     processMemoryCandidate(message.author.id, parsedIntent.memoryCandidate);
-            // }
-
-            // 🧠 BƯỚC 4: REASONING ENGINE (TRẢ LỜI NGƯỜI DÙNG KÈM THEO KÝ ỨC)
+            // 🧠 BƯỚC 3: REASONING ENGINE (TRẢ LỜI NGƯỜI DÙNG KÈM THEO KÝ ỨC)
             let aiResponse = "";
             if (isImage) {
                 aiResponse = await askYueWithVision(
                     runtimeContext.user.discordId,
                     runtimeContext.user.currentDisplayName,
-                    userPrompt,
+                    fullUserPromptWithReply,
                     mediaData.url,
-                    mediaData.mimeType
+                    mediaData.mimeType,
+                    isGifSpam
                 );
             } else {
                 aiResponse = await askYue(
                     runtimeContext.user.discordId,
                     runtimeContext.user.currentDisplayName,
-                    userPrompt,
+                    fullUserPromptWithReply,
                     message,
                     false,          // isVoice
                     null,           // ingameContext

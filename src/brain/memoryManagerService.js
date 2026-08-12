@@ -8,7 +8,20 @@ import { memoryProvider } from './MemoryProvider.js';
  * 3. Ngắn hạn (Ephemeral): Thông tin ngoài lề, sinh hoạt ngắn hạn (vài ngày) (Importance 1-4)
  */
 export function handleMemoryCandidate(discordId, candidate) {
-    if (!candidate || !candidate.fact || (!candidate.fact.value && typeof candidate.fact !== 'string')) {
+    if (!candidate) return null;
+
+    // 🙈 Xử lý nếu AI đề xuất tạm ẩn/quên một ký ức cụ thể khi người dùng yêu cầu
+    if (candidate.action === 'suppress' || candidate.action === 'forget') {
+        const keyToSuppress = candidate.fact?.key || candidate.fact?.value || candidate.fact || candidate.key;
+        if (!keyToSuppress) return null;
+
+        const success = memoryProvider.suppressMemory(discordId, keyToSuppress);
+        return success 
+            ? `🙈 Đã tạm ẩn ký ức "${keyToSuppress}" (Không chủ động nhắc lại)` 
+            : null;
+    }
+
+    if (!candidate.fact || (!candidate.fact.value && typeof candidate.fact !== 'string')) {
         return null;
     }
 
@@ -43,8 +56,8 @@ export function handleMemoryCandidate(discordId, candidate) {
     return `"${factValue}" (${type.toUpperCase()})`;
 }
 
-export function selectRelevantMemories(targetUserId, requestingUserId, currentGuildId) {
-    const rawMemories = memoryProvider.getRelevantKnowledge(targetUserId, currentGuildId, requestingUserId);
+export function selectRelevantMemories(targetUserId, requestingUserId, currentGuildId, query = null) {
+    const rawMemories = memoryProvider.getRelevantKnowledge(targetUserId, currentGuildId, requestingUserId, { query });
 
     rawMemories.forEach(mem => {
         memoryProvider.reinforceMemory(targetUserId, mem.id);
@@ -52,6 +65,7 @@ export function selectRelevantMemories(targetUserId, requestingUserId, currentGu
 
     return rawMemories.map(m => {
         const tag = m.type === 'permanent' ? 'VĨNH VIỄN' : (m.type === 'medium' ? 'TRUNG HẠN' : 'NGẮN HẠN');
-        return `[${tag}][${(m.category || 'INFO').toUpperCase()}] ${m.fact?.value || m.fact}`;
+        const suppressedTag = m.isSuppressed ? '[ĐÃ ẨN/CHỈ TRẢ LỜI KHI ĐƯỢC HỎI] ' : '';
+        return `[${tag}][${(m.category || 'INFO').toUpperCase()}] ${suppressedTag}${m.fact?.value || m.fact}`;
     });
 }

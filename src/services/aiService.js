@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
 import { filterCleanHistory, updateTopicSummary } from '../brain/conversationContextService.js';
 import { getLocalChannelHistory, saveYueReplyToLocalHistory } from './chatHistoryManager.js';
+import { extractGifKeyframes } from './gifProcessor.js';
 import { memoryProvider } from '../brain/MemoryProvider.js';
 import { 
     BASE_SYSTEM_PROMPT, 
@@ -81,10 +82,11 @@ export async function askYue(
         isVoice = false;
     }
 
+    const isIngame = !messageContext?.channel;
+
     try {
         let formattedHistory = [];
         let pendingUserText = "";
-        const isIngame = !messageContext?.channel;
         const channelId = messageContext?.channel?.id;
 
         if (isVoice || isIngame) {
@@ -315,17 +317,51 @@ async function urlToGenerativePart(url, mimeType) {
     };
 }
 
-export async function askYueWithVision(userId, username, userPrompt, imageUrl, mimeType) {
+export async function askYueWithVision(userId, username, userPrompt, imageUrl, mimeType, isGifSpam = false) {
     try {
         const model = getNextAIInstance(false, false, null);
-        const imagePart = await urlToGenerativePart(imageUrl, mimeType);
 
-        // Clean raw URLs from userPrompt so Gemini doesn't get confused by URL text
+        // Download raw media buffer
+        const response = await fetch(imageUrl);
+        const contentType = response.headers.get('content-type');
+        const buffer = await response.arrayBuffer();
+
+        let finalMime = mimeType || "image/gif";
+        if (contentType && contentType.startsWith('image/')) {
+            finalMime = contentType.split(';')[0].trim().toLowerCase();
+        }
+
         const cleanPromptText = (userPrompt || '').replace(/(https?:\/\/[^\s]+)/gi, '').trim();
 
-        const promptText = `[User ID: ${userId} | ${username}]: ${cleanPromptText || 'Soi giúp tui bức ảnh/GIF này xem có gì hài hước hoặc có nội dung gì với!'}`;
+        // Extract keyframe image parts if GIF/WebP animation, or single frame fallback
+        let imageParts = [];
+        if (finalMime.includes('gif') || finalMime.includes('webp') || imageUrl.toLowerCase().includes('.gif') || imageUrl.toLowerCase().includes('tenor') || imageUrl.toLowerCase().includes('giphy')) {
+            imageParts = await extractGifKeyframes(Buffer.from(buffer), finalMime, 4);
+        } else {
+            imageParts = [{
+                inlineData: {
+                    data: Buffer.from(buffer).toString("base64"),
+                    mimeType: finalMime
+                }
+            }];
+        }
 
-        const result = await model.generateContent([promptText, imagePart]);
+        const hasMultipleFrames = imageParts.length > 1;
+        const visionContextNote = hasMultipleFrames
+            ? `\n[LƯU Ý VISION]: Đây là chuỗi ${imageParts.length} khung hình (keyframes) bóc tách từ đầu đến cuối của 1 GIF động. Hãy xem tất cả các khung hình để hiểu trọn vẹn diễn biến.`
+            : ``;
+
+        const bodyLanguageInstruction = `
+[HƯỚNG DẪN TƯƠNG TÁC CHUẨN NGƯỜI THẬT]:
+1. ĐỌC EMOTION/NGÔN NGỮ CƠ THỂ TRONG GIF: Hãy coi GIF/ảnh này như cảm xúc, nét mặt hoặc cử chỉ (khóc nhè, hoảng hốt, mặt cay đắng, cười vãi khèn, ngơ ngác, bất lực...) mà ${username} đang muốn biểu đạt trong cuộc trò chuyện lúc này.
+2. TƯƠNG TÁC VỚI CẢM XÚC: Đừng nhận xét bức ảnh như bài kiểm tra ("ảnh này buồn cười/xấu"). HÃY TRẢ LỜI TRỰC TIẾP VÀO CẢM XÚC THỰC TẾ của ${username} (ví dụ: trêu đùa, hỏi thăm lý do, chia sẻ cảm xúc, nương theo trò đùa).
+3. NẾU USER SPAM GIF RÁC VÔ NGHĨA LIÊN TỤC: Hãy trêu ghẹo hoặc cằn nhằn nhẹ nhàng bằng nhiều cách nói tự nhiên linh hoạt khác nhau, tuyệt đối KHÔNG lặp lại câu càm ràm máy móc.`;
+
+        const spamNote = isGifSpam ? `\n[Ghi chú]: User vừa gửi dồn dập nhiều GIF không kèm chữ. Nếu đây là GIF thể hiện cảm xúc cho câu chuyện thì hãy tương tác với cảm xúc đó; nếu chỉ là spam rác vô nghĩa thì trêu chọc/nhắc nhở vui vẻ linh hoạt.` : ``;
+
+        const promptText = `[User ID: ${userId} | ${username}]: ${cleanPromptText || '[Gửi 1 GIF/ảnh biểu cảm]'}${visionContextNote}${spamNote}\n${bodyLanguageInstruction}`;
+
+        const result = await model.generateContent([promptText, ...imageParts]);
         const responseText = result.response.text();
 
         const parsedRes = extractValidJson(responseText);
