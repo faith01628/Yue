@@ -154,6 +154,13 @@ client.on('messageCreate', async (message) => {
     const isMentioned = message.mentions.has(client.user);
     const isSpecialChannel = message.channel.name === 'con-vợ-ai';
 
+    // ⛔ 🛡️ BẢO VỆ DUNG LƯỢNG BỘ NHỚ KÊNH:
+    // CHỈ XỬ LÝ KHI: Được tag tên (@yue) HOẶC là kênh chat riêng "con-vợ-ai".
+    // Mọi kênh chat thường khác nếu người dùng không đề cập @yue -> BỎ QUA NGAY LẬP TỨC (Không ghi file rác!).
+    if (!isMentioned && !isSpecialChannel) {
+        return;
+    }
+
     // 1. Trích xuất media & nội dung tin nhắn
     let userPrompt = message.content
         .replace(`<@!${client.user.id}>`, '')
@@ -163,7 +170,7 @@ client.on('messageCreate', async (message) => {
     const mediaData = await extractMediaFromMessage(message);
     const isImage = Boolean(mediaData);
 
-    // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL (Lưu tất cả tin nhắn trong kênh để giữ đúng ngữ cảnh đối thoại)
+    // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL (Chỉ lưu trong kênh con-vợ-ai hoặc khi có tag Yue)
     saveMessageToLocalHistory(message.channel.id, {
         authorId: message.author.id,
         authorName: message.member?.displayName || message.author.username,
