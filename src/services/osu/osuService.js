@@ -126,9 +126,23 @@ export async function getUserRecentPlay(username, mode = 'osu') {
             mode: mode
         });
 
+        const score = recents.length > 0 ? recents[0] : null;
+
+        if (score && score.beatmap && score.passed) {
+            try {
+                const userScoresData = await getUserBeatmapScores(user.username, score.beatmap.id);
+                if (userScoresData && userScoresData.scores && userScoresData.scores.length > 0) {
+                    const matchedScore = userScoresData.scores.find(s => s.id === score.id || s.created_at === score.created_at || (s.score === score.score && s.max_combo === score.max_combo));
+                    if (matchedScore && (matchedScore.position || matchedScore.rank_global)) {
+                        score.position = matchedScore.position || matchedScore.rank_global;
+                    }
+                }
+            } catch (e) {}
+        }
+
         return {
             user,
-            score: recents.length > 0 ? recents[0] : null
+            score
         };
     } catch (error) {
         console.error(`❌ Lỗi lấy Recent Play của ${username}:`, error.response?.data || error.message);

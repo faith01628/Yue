@@ -20,3 +20,5 @@ Thumbs.db
 #datauser
 src/data/
 !src/data/.gitkeep
+
+scratch/

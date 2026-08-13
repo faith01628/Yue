@@ -315,13 +315,13 @@ export class MemoryProvider {
     }
 
     getAffectionTier(score) {
-        if (score >= 100000) {
+        if (score >= 50000) {
             return { score, level: 'Tri Kỷ / Siêu Thân Thiết', description: 'Cạ cứng ruột, cực kỳ tin tưởng, hết mình trợ giúp, trêu yêu ngọt ngào' };
-        } else if (score >= 50000) {
+        } else if (score >= 25000) {
             return { score, level: 'Bạn Thân Cao Cấp', description: 'Rất thân thiết, chia sẻ tâm sự, rủ rê chơi game cực kỳ thoải mái' };
-        } else if (score >= 20000) {
+        } else if (score >= 10000) {
             return { score, level: 'Bạn Thân', description: 'Vui vẻ, hay trêu ghẹo tấu hài, rủ rê chơi game thoải mái' };
-        } else if (score >= 5000) {
+        } else if (score >= 3000) {
             return { score, level: 'Bạn Bình Thường', description: 'Lịch sự, hài hước nhẹ nhàng chuẩn gamer Discord' };
         } else if (score >= 1000) {
             return { score, level: 'Mới Quen', description: 'Trả lời xã giao, chảnh chảnh nhẹ kiểu Neuro-sama' };

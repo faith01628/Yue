@@ -234,7 +234,8 @@ client.on('messageCreate', async (message) => {
                     fullUserPromptWithReply,
                     mediaData.url,
                     mediaData.mimeType,
-                    isGifSpam
+                    isGifSpam,
+                    runtimeContext
                 );
             } else {
                 aiResponse = await askYue(

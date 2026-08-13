@@ -8,16 +8,40 @@ import ffmpegpath from 'ffmpeg-static';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Checks if a buffer or mime/url is an animated GIF or animated WebP.
+ */
+export function isAnimatedMedia(buffer, mimeType = '', url = '') {
+    const lowerUrl = (url || '').toLowerCase();
+    const lowerMime = (mimeType || '').toLowerCase();
+
+    // 1. Check GIF format (always animated or multi-frame)
+    if (lowerMime.includes('gif') || lowerUrl.includes('.gif') || lowerUrl.includes('tenor') || lowerUrl.includes('giphy')) {
+        return true;
+    }
+
+    // 2. Check WebP animation chunks in buffer
+    if (lowerMime.includes('webp') || lowerUrl.includes('.webp')) {
+        if (buffer && Buffer.isBuffer(buffer)) {
+            const header = buffer.subarray(0, Math.min(buffer.length, 2048)).toString('latin1');
+            // Animated WebP requires VP8X extended header AND ANIM/ANMF chunk
+            return header.includes('VP8X') && (header.includes('ANIM') || header.includes('ANMF'));
+        }
+    }
+
+    return false;
+}
+
+/**
  * Extracts up to maxFrames keyframes from a GIF buffer or URL.
  * Returns an array of objects: [{ inlineData: { data: base64String, mimeType: 'image/png' } }]
  */
-export async function extractGifKeyframes(inputBuffer, originalMimeType = 'image/gif', maxFrames = 4) {
-    // If not a GIF or animated format, return standard single frame format
-    if (!originalMimeType.includes('gif') && !originalMimeType.includes('webp')) {
+export async function extractGifKeyframes(inputBuffer, originalMimeType = 'image/gif', maxFrames = 4, url = '') {
+    // If not an animated media format, return standard single frame format immediately
+    if (!isAnimatedMedia(inputBuffer, originalMimeType, url)) {
         return [{
             inlineData: {
                 data: Buffer.from(inputBuffer).toString('base64'),
-                mimeType: originalMimeType
+                mimeType: originalMimeType || 'image/png'
             }
         }];
     }
