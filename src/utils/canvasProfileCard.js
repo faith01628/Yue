@@ -28,9 +28,9 @@ export async function createProfileCardImage(profile, bestScores = []) {
             ctx.save();
             ctx.globalAlpha = 0.35;
 
-            // Tính toán Aspect-Fill Crop chuẩn tỷ lệ phủ tràn 100% toàn bộ thẻ Profile
+            // Tính toán Aspect-Fill Crop chuẩn tỷ lệ cho Header Cover Banner
             const targetW = width;
-            const targetH = height;
+            const targetH = 195;
             const imgAspect = coverImg.width / coverImg.height;
             const targetAspect = targetW / targetH;
 
@@ -44,16 +44,14 @@ export async function createProfileCardImage(profile, bestScores = []) {
             }
 
             ctx.drawImage(coverImg, srcX, srcY, srcW, srcH, 0, 0, targetW, targetH);
+            ctx.restore();
 
-            // Màng mờ phủ tràn toàn bộ thẻ mượt mà, xóa bỏ 100% vết cắt ngang ở giữa
-            const fadeGrad = ctx.createLinearGradient(0, 0, 0, height);
-            fadeGrad.addColorStop(0, 'rgba(10, 8, 20, 0.25)');
-            fadeGrad.addColorStop(0.35, 'rgba(10, 8, 20, 0.65)');
-            fadeGrad.addColorStop(0.8, 'rgba(10, 8, 20, 0.88)');
+            // Phủ dải màng mờ vuốt mượt từ y=90 xuống y=195
+            const fadeGrad = ctx.createLinearGradient(0, 90, 0, 195);
+            fadeGrad.addColorStop(0, 'rgba(10, 8, 20, 0)');
             fadeGrad.addColorStop(1, '#0a0814');
             ctx.fillStyle = fadeGrad;
-            ctx.fillRect(0, 0, width, height);
-            ctx.restore();
+            ctx.fillRect(0, 90, width, 105);
         } catch (e) {
             // Bỏ qua nếu lỗi tải cover
         }
