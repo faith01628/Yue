@@ -1,5 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
-import { getUserProfile, getUserBeatmapScores, calculateBeatmapPP, timeAgo } from '../../services/osu/osuService.js';
+import { getUserProfile, getUserBeatmapScores, calculateBeatmapPP, getBeatmapLeaderboard, timeAgo } from '../../services/osu/osuService.js';
 import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 import { buildDetailedScoreEmbed } from './embedBuilder.js';
 import { findBeatmapIdFromChannel } from './helper.js';
@@ -35,16 +35,21 @@ export async function handleOsuCompareCommand(message) {
         return message.reply({ embeds: [embed] });
     }
 
-    // TH2: Nhiều Plays -> Embed danh sách
-    const star = beatmap.difficulty_rating ? beatmap.difficulty_rating.toFixed(2) : '?.??';
+    // Lấy trước Leaderboard để tra cứu thứ hạng server của các điểm số nếu cần
+    let leaderboardScores = [];
+    try {
+        const lbData = await getBeatmapLeaderboard(beatmap.id);
+        if (lbData?.scores) leaderboardScores = lbData.scores;
+    } catch (e) {}
 
+    // TH2: Nhiều Plays -> Embed danh sách
     const scoreLines = await Promise.all(scores.map(async (score, idx) => {
         const index = idx + 1;
         const modsArr = score.mods || [];
-        const modsStr = modsArr.length > 0 ? ` **+${modsArr.join('')}**` : ' **+NoMod**';
+        const modsStr = modsArr.length > 0 ? `+${modsArr.join('')}` : '+NoMod';
+        const cleanMods = modsArr.length > 0 ? modsArr.join('') : '';
         const rankEmoji = getRankEmoji(score.rank, modsArr);
         const acc = (score.accuracy * 100).toFixed(2);
-        const pp = Math.round(score.pp || 0);
 
         // Hit counts
         const stats = score.statistics || {};
@@ -54,43 +59,77 @@ export async function handleOsuCompareCommand(message) {
         const countMiss = stats.count_miss || stats.miss || 0;
         const hitsStr = `[${count300}/${count100}/${count50}/${countMiss}]`;
 
+        const count300FC = count300 + countMiss;
+        const totalHits = count300FC + count100 + count50;
+        const fcAccNum = totalHits > 0
+            ? (((count300FC * 300) + (count100 * 100) + (count50 * 50)) / (totalHits * 300) * 100)
+            : (score.accuracy * 100);
+        const fcAccStr = fcAccNum.toFixed(2);
+
         const totalScore = score.score ? score.score.toLocaleString() : '0';
         const timeStr = timeAgo(score.created_at || score.ended_at);
 
-        let mapMaxCombo = beatmap?.max_combo;
-        let fcPp = null;
+        let realPlayResult = null;
+        let fcResult = null;
 
         try {
-            const fcResult = await calculateBeatmapPP(beatmap.id, {
-                accuracy: score.accuracy * 100,
-                mods: modsArr.join(''),
-                misses: 0
-            });
-
-            if (fcResult) {
-                if (!mapMaxCombo && fcResult.difficulty?.max_combo) {
-                    mapMaxCombo = fcResult.difficulty.max_combo;
-                }
-                if (fcResult.pp) {
-                    fcPp = Math.round(fcResult.pp);
-                }
-            }
+            [realPlayResult, fcResult] = await Promise.all([
+                calculateBeatmapPP(beatmap.id, {
+                    accuracy: score.accuracy * 100,
+                    n100: count100,
+                    n50: count50,
+                    misses: countMiss,
+                    mods: cleanMods
+                }),
+                calculateBeatmapPP(beatmap.id, {
+                    accuracy: fcAccNum,
+                    n100: count100,
+                    n50: count50,
+                    misses: 0,
+                    mods: cleanMods
+                })
+            ]);
         } catch (err) {}
 
-        const comboDisplay = mapMaxCombo 
-            ? `**${score.max_combo}**/${mapMaxCombo}x` 
-            : `**${score.max_combo}x**`;
+        // Star rating có tính Mod
+        const rawStars = realPlayResult?.difficulty?.stars || fcResult?.difficulty?.stars || beatmap.difficulty_rating || 0;
+        const starStr = rawStars ? rawStars.toFixed(2) : '?.??';
 
-        let ppDisplay = `**${pp}pp**`;
+        // Max Combo & Combo display
+        let mapMaxCombo = beatmap?.max_combo || realPlayResult?.difficulty?.maxCombo || fcResult?.difficulty?.maxCombo || 0;
+        if (!mapMaxCombo && countMiss === 0) mapMaxCombo = score.max_combo;
+
+        const comboDisplay = mapMaxCombo 
+            ? `**x${score.max_combo}/${mapMaxCombo}**` 
+            : `**x${score.max_combo}**`;
+
+        // PP display với 2 chữ số thập phân
+        const currentPpNum = (score.pp !== undefined && score.pp !== null && score.pp > 0)
+            ? score.pp
+            : (realPlayResult ? realPlayResult.pp : 0);
+        const currentPpStr = currentPpNum.toFixed(2);
+
+        const fcPpNum = fcResult ? fcResult.pp : currentPpNum;
+        const fcPpStr = fcPpNum.toFixed(2);
+
         const isChoke = countMiss > 0 || (mapMaxCombo && score.max_combo < mapMaxCombo * 0.98);
 
-        if (isChoke && fcPp && fcPp > pp) {
-            ppDisplay = `**${pp}**/${fcPp}pp *(if FC)*`;
+        let ppDisplay = `**${currentPpStr}pp**`;
+        if (isChoke && fcPpNum > currentPpNum) {
+            ppDisplay = `**${currentPpStr}** (${fcPpStr}pp for ${fcAccStr}% FC)`;
         }
 
-        const line1 = `**${index}.** ${rankEmoji}${modsStr}`;
+        // Rank server của điểm số này (tra cứu từ position hoặc leaderboard)
+        let serverRank = score.position || score.rank_global || score.global_rank;
+        if (!serverRank && leaderboardScores.length > 0) {
+            const matchIndex = leaderboardScores.findIndex(s => s.id === score.id || (s.user_id === user.id && s.score === score.score));
+            if (matchIndex !== -1) serverRank = matchIndex + 1;
+        }
+        const serverRankStr = serverRank ? ` • 🌐 **#${serverRank.toLocaleString()}**` : '';
+
+        const line1 = `**${index}.** ${rankEmoji} **${modsStr}** Score **[${starStr}★]**`;
         const line2 = `▸ PP ▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
-        const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\``;
+        const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\`${serverRankStr}`;
 
         return `${line1}\n${line2}\n${line3}`;
     }));
@@ -104,7 +143,7 @@ export async function handleOsuCompareCommand(message) {
             iconURL: user.avatar_url,
             url: `https://osu.ppy.sh/users/${user.id}`
         })
-        .setTitle(`${beatmapset.artist} - ${beatmapset.title} [${beatmap.version}] \`[${star}★]\``)
+        .setTitle(`${beatmapset.artist} - ${beatmapset.title} [${beatmap.version}]`)
         .setURL(beatmap.url)
         .setThumbnail(beatmapset.covers.list)
         .setDescription(finalDescription)

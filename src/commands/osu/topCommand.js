@@ -61,9 +61,9 @@ export async function handleOsuTopCommand(message) {
             const index = start + idx + 1;
             const modsArr = score.mods || [];
             const modsStr = modsArr.length > 0 ? ` **+${modsArr.join('')}**` : '';
+            const cleanMods = modsArr.length > 0 ? modsArr.join('') : '';
             const rankEmoji = getRankEmoji(score.rank, modsArr);
             const acc = (score.accuracy * 100).toFixed(2);
-            const pp = Math.round(score.pp || 0);
 
             const beatmapId = score.beatmap?.id || score.beatmap_id;
 
@@ -75,52 +75,75 @@ export async function handleOsuTopCommand(message) {
             const countMiss = stats.count_miss || stats.miss || 0;
             const hitsStr = `[${count300}/${count100}/${count50}/${countMiss}]`;
 
+            const count300FC = count300 + countMiss;
+            const totalHits = count300FC + count100 + count50;
+            const fcAccNum = totalHits > 0
+                ? (((count300FC * 300) + (count100 * 100) + (count50 * 50)) / (totalHits * 300) * 100)
+                : (score.accuracy * 100);
+            const fcAccStr = fcAccNum.toFixed(2);
+
             const totalScore = score.score ? score.score.toLocaleString() : '0';
             const timeStr = timeAgo(score.created_at || score.ended_at);
 
-            let mapMaxCombo = score.beatmap?.max_combo;
-            let fcPp = null;
+            let realPlayResult = null;
+            let fcResult = null;
 
             if (beatmapId) {
-                if (!mapMaxCombo) {
-                    const detail = await getBeatmapDetail(beatmapId);
-                    if (detail?.max_combo) mapMaxCombo = detail.max_combo;
-                }
-
                 try {
-                    const fcResult = await calculateBeatmapPP(beatmapId, {
-                        accuracy: score.accuracy * 100,
-                        mods: modsArr.join(''),
-                        misses: 0
-                    });
-
-                    if (fcResult) {
-                        if (!mapMaxCombo && fcResult.difficulty?.max_combo) {
-                            mapMaxCombo = fcResult.difficulty.max_combo;
-                        }
-                        if (fcResult.pp) {
-                            fcPp = Math.round(fcResult.pp);
-                        }
-                    }
+                    [realPlayResult, fcResult] = await Promise.all([
+                        calculateBeatmapPP(beatmapId, {
+                            accuracy: score.accuracy * 100,
+                            n100: count100,
+                            n50: count50,
+                            misses: countMiss,
+                            mods: cleanMods
+                        }),
+                        calculateBeatmapPP(beatmapId, {
+                            accuracy: fcAccNum,
+                            n100: count100,
+                            n50: count50,
+                            misses: 0,
+                            mods: cleanMods
+                        })
+                    ]);
                 } catch (err) {}
             }
 
-            const star = score.beatmap?.difficulty_rating ? score.beatmap.difficulty_rating.toFixed(2) : '?.??';
+            // Star rating có tính Mod
+            const rawStars = realPlayResult?.difficulty?.stars || fcResult?.difficulty?.stars || score.beatmap?.difficulty_rating || 0;
+            const starStr = rawStars ? rawStars.toFixed(2) : '?.??';
+
+            // Max Combo & Combo display
+            let mapMaxCombo = score.beatmap?.max_combo || realPlayResult?.difficulty?.maxCombo || fcResult?.difficulty?.maxCombo || 0;
+            if (!mapMaxCombo && countMiss === 0) mapMaxCombo = score.max_combo;
 
             const comboDisplay = mapMaxCombo 
-                ? `**${score.max_combo}**/${mapMaxCombo}x` 
-                : `**${score.max_combo}x**`;
+                ? `**x${score.max_combo}/${mapMaxCombo}**` 
+                : `**x${score.max_combo}**`;
 
-            let ppDisplay = `**${pp}pp**`;
-            const isChoke = countMiss > 0 || (mapMaxCombo && score.max_combo < mapMaxCombo);
+            // PP display với 2 chữ số thập phân
+            const currentPpNum = (score.pp !== undefined && score.pp !== null && score.pp > 0)
+                ? score.pp
+                : (realPlayResult ? realPlayResult.pp : 0);
+            const currentPpStr = currentPpNum.toFixed(2);
 
-            if (isChoke && fcPp && fcPp > pp) {
-                ppDisplay = `**${pp}**/${fcPp}pp *(if FC)*`;
+            const fcPpNum = fcResult ? fcResult.pp : currentPpNum;
+            const fcPpStr = fcPpNum.toFixed(2);
+
+            const isChoke = countMiss > 0 || (mapMaxCombo && score.max_combo < mapMaxCombo * 0.98);
+
+            let ppDisplay = `**${currentPpStr}pp**`;
+            if (isChoke && fcPpNum > currentPpNum) {
+                ppDisplay = `**${currentPpStr}** (${fcPpStr}pp for ${fcAccStr}% FC)`;
             }
 
-            const line1 = `**${index}.** ${rankEmoji} **[${score.beatmapset.title} [${score.beatmap.version}]](${score.beatmap.url})**${modsStr} \`[${star}★]\``;
+            // Rank server của điểm số này (nếu có)
+            const serverRank = score.position || score.rank_global || score.global_rank;
+            const serverRankStr = serverRank ? ` • 🌐 **#${serverRank.toLocaleString()}**` : '';
+
+            const line1 = `**${index}.** ${rankEmoji} **[${score.beatmapset.title} [${score.beatmap.version}]](${score.beatmap.url})**${modsStr} \`[${starStr}★]\``;
             const line2 = `▸ PP ▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
-            const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\``;
+            const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\`${serverRankStr}`;
 
             return `${line1}\n${line2}\n${line3}`;
         }));
