@@ -15,18 +15,24 @@ import { getRankEmoji, EMOJIS } from '../../config/emojis.js';
 
 export async function handleOsuTopCommand(message) {
     const rawContent = message.content.trim();
-    const args = rawContent.split(/ +/).slice(1);
+    const parts = rawContent.split(/ +/);
+    const commandToken = parts[0];
+    let remainingArgs = parts.slice(1);
 
     let targetIndex = null;
-    const topNumMatch = rawContent.match(/^!top(\d+)|^!t(\d+)/i);
-    if (topNumMatch) {
-        targetIndex = parseInt(topNumMatch[1] || topNumMatch[2]);
-    } else if (args[0] && !isNaN(parseInt(args[0]))) {
-        targetIndex = parseInt(args[0]);
-        args.shift();
+
+    // Pattern 1: .t5 / .top5 / !t5 / !top5
+    const matchAttached = commandToken.match(/^[.!><]?(?:top|t)(\d+)$/i);
+    if (matchAttached) {
+        targetIndex = parseInt(matchAttached[1]);
+    } else if (remainingArgs[0] && /^\d+$/.test(remainingArgs[0])) {
+        // Pattern 2: .t 5 / .top 5
+        targetIndex = parseInt(remainingArgs[0]);
+        remainingArgs = remainingArgs.slice(1);
     }
 
-    const rawUsername = args.filter(a => isNaN(a)).join(' ').trim();
+    // Tên người chơi hỗ trợ có khoảng trắng (ví dụ: Moki Moki)
+    const rawUsername = remainingArgs.join(' ').trim();
     const linkedUsername = getLinkedOsuUsername(message.author.id);
     const username = rawUsername || linkedUsername || message.member?.displayName || message.author.username;
 
@@ -38,7 +44,7 @@ export async function handleOsuTopCommand(message) {
 
     const { user, bestScores } = data;
 
-    // 🎯 TH1: Xem chi tiết 1 play cụ thể (!top 1 / !t 5)
+    // 🎯 TH1: Xem chi tiết 1 play cụ thể (!top 1 / !t 5 / .t5)
     if (targetIndex !== null) {
         if (targetIndex < 1 || targetIndex > bestScores.length) {
             return message.reply(`**${user.username}** chỉ có ${bestScores.length} bài trong Top Plays thôi ông ơi!`);
@@ -134,16 +140,28 @@ export async function handleOsuTopCommand(message) {
 
             let ppDisplay = `**${currentPpStr}pp**`;
             if (isChoke && fcPpNum > currentPpNum) {
-                ppDisplay = `**${currentPpStr}** (${fcPpStr}pp for ${fcAccStr}% FC)`;
+                ppDisplay = `**${currentPpStr}pp** *(${fcPpStr}pp for ${fcAccStr}% FC)*`;
             }
+
+            // Tính toán Trọng số PP (Weighted PP & Weight %) - Đã bỏ icon ⚖️
+            const weightPct = Math.pow(0.95, index - 1) * 100;
+            const weightedPP = (currentPpNum * Math.pow(0.95, index - 1)).toFixed(1);
+            const weightStr = ` • **${weightedPP}pp** (${weightPct.toFixed(0)}%)`;
+
+            const missTag = countMiss > 0 ? ` • ${EMOJIS.MISS || '❌'} **${countMiss}**` : '';
 
             // Rank server của điểm số này (nếu có)
             const serverRank = score.position || score.rank_global || score.global_rank;
             const serverRankStr = serverRank ? ` • 🌐 **#${serverRank.toLocaleString()}**` : '';
 
-            const line1 = `**${index}.** ${rankEmoji} **[${score.beatmapset.title} [${score.beatmap.version}]](${score.beatmap.url})**${modsStr} \`[${starStr}★]\``;
-            const line2 = `▸ PP ▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
-            const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\`${serverRankStr}`;
+            // Link tới trang web điểm số của play (nếu có ID)
+            const scoreId = score.id || score.best_id;
+            const scoreUrl = scoreId ? `https://osu.ppy.sh/scores/osu/${scoreId}` : score.beatmap?.url;
+            const scoreLink = scoreUrl ? ` • [Score](${scoreUrl})` : '';
+
+            const line1 = `**${index})** ${rankEmoji} **[${score.beatmapset.title} [${score.beatmap.version}]](${score.beatmap.url})**${modsStr} **[${starStr}★]**`;
+            const line2 = `▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
+            const line3 = `▸ **${totalScore}**${missTag} • \`${hitsStr}\`${weightStr}${serverRankStr}${scoreLink}`;
 
             return `${line1}\n${line2}\n${line3}`;
         }));

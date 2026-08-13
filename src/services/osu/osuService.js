@@ -188,15 +188,20 @@ export async function getUserBeatmapScores(username, beatmapId) {
         // Còn nếu dùng axios trực tiếp thì truyền Header chứa token:
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
 
-        const response = await axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores/users/${user.id}/all`, {
-            headers: {
-                ...headers,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        });
+        const [allScoresRes, topScoreRes] = await Promise.all([
+            axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores/users/${user.id}/all`, {
+                headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' }
+            }).catch(() => null),
+            axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores/users/${user.id}`, {
+                headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' }
+            }).catch(() => null)
+        ]);
 
-        const scores = response.data.scores || [];
+        const scores = allScoresRes?.data?.scores || [];
+        if (scores.length > 0 && topScoreRes?.data?.position) {
+            scores[0].position = topScoreRes.data.position;
+        }
+
         const beatmap = await getBeatmapDetail(beatmapId);
 
         return {
@@ -230,15 +235,38 @@ export async function getBeatmapDetail(beatmapId) {
 }
 
 /**
- * 6. Lấy Leaderboard Global
+ * 6. Lấy Leaderboard (Hỗ trợ Global, Country VN, và Mod Filter)
  */
-export async function getBeatmapLeaderboard(beatmapId, mode = 'osu') {
+export async function getBeatmapLeaderboard(beatmapId, options = {}) {
     try {
-        const data = await fetchOsuAPI(`/beatmaps/${beatmapId}/scores`, { mode });
-        const beatmap = await fetchOsuAPI(`/beatmaps/${beatmapId}`);
+        const { mode = 'osu', mods = [], country = null } = (typeof options === 'string') ? { mode: options } : options;
+        const token = await getOsuToken();
+        const headers = { Authorization: `Bearer ${token}` };
+
+        const params = { mode };
+        if (mods && mods.length > 0) {
+            params['mods[]'] = mods;
+        }
+
+        const [scoresRes, beatmap] = await Promise.all([
+            axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores`, {
+                headers,
+                params
+            }).catch(() => null),
+            fetchOsuAPI(`/beatmaps/${beatmapId}`)
+        ]);
+
+        let rawScores = scoresRes?.data?.scores || [];
+
+        // Nếu lọc theo quốc gia (VN)
+        if (country) {
+            const countryUpper = country.toUpperCase();
+            rawScores = rawScores.filter(s => s.user?.country_code === countryUpper);
+        }
+
         return {
             beatmap,
-            scores: data.scores || []
+            scores: rawScores
         };
     } catch (error) {
         console.error(`❌ Lỗi lấy Leaderboard của Beatmap ${beatmapId}:`, error.response?.data || error.message);
@@ -246,38 +274,55 @@ export async function getBeatmapLeaderboard(beatmapId, mode = 'osu') {
     }
 }
 
+const beatmapBytesCache = new Map();
+
 /**
- * 7. Tải file .osu và Tính toán PP bằng rosu-pp-js (Dùng fetch + Mirror chống 403 tuyệt đối)
+ * 7. Tải file .osu và Tính toán PP bằng rosu-pp-js (Dùng fetch + Mirror + Cache RAM siêu tốc)
  */
 export async function calculateBeatmapPP(beatmapId, options = {}) {
-    let mapArrayBuffer = null;
+    let mapBytes = beatmapBytesCache.get(beatmapId);
 
-    const urls = [
-        `https://catboy.best/osu/${beatmapId}`,
-        `https://sayobot.cn/osu/${beatmapId}`,
-        `https://osu.ppy.sh/osu/${beatmapId}`
-    ];
+    if (!mapBytes) {
+        const urls = [
+            `https://osu.ppy.sh/osu/${beatmapId}`,
+            `https://catboy.best/osu/${beatmapId}`,
+            `https://sayobot.cn/osu/${beatmapId}`
+        ];
 
-    for (const url of urls) {
-        try {
-            const res = await fetch(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        for (const url of urls) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+                const res = await fetch(url, {
+                    signal: controller.signal,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                });
+                clearTimeout(timeoutId);
+
+                if (res.ok) {
+                    const buffer = await res.arrayBuffer();
+                    mapBytes = new Uint8Array(buffer);
+                    beatmapBytesCache.set(beatmapId, mapBytes);
+
+                    // Giữ bộ nhớ RAM tối đa 500 bài gần nhất
+                    if (beatmapBytesCache.size > 500) {
+                        const firstKey = beatmapBytesCache.keys().next().value;
+                        beatmapBytesCache.delete(firstKey);
+                    }
+                    break;
                 }
-            });
-            if (res.ok) {
-                mapArrayBuffer = await res.arrayBuffer();
-                break;
+            } catch (err) {
+                continue;
             }
-        } catch (err) {
-            continue;
         }
     }
 
-    if (!mapArrayBuffer) return null;
+    if (!mapBytes) return null;
 
     try {
-        const mapBytes = new Uint8Array(mapArrayBuffer);
         const map = new rosu.Beatmap(mapBytes);
         
         // 🎯 Build Params chuẩn cho rosu-pp-js

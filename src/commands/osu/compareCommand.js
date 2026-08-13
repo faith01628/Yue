@@ -116,7 +116,7 @@ export async function handleOsuCompareCommand(message) {
 
         let ppDisplay = `**${currentPpStr}pp**`;
         if (isChoke && fcPpNum > currentPpNum) {
-            ppDisplay = `**${currentPpStr}** (${fcPpStr}pp for ${fcAccStr}% FC)`;
+            ppDisplay = `**${currentPpStr}pp** *(${fcPpStr}pp for ${fcAccStr}% FC)*`;
         }
 
         // Rank server của điểm số này (tra cứu từ position hoặc leaderboard)
@@ -125,11 +125,17 @@ export async function handleOsuCompareCommand(message) {
             const matchIndex = leaderboardScores.findIndex(s => s.id === score.id || (s.user_id === user.id && s.score === score.score));
             if (matchIndex !== -1) serverRank = matchIndex + 1;
         }
-        const serverRankStr = serverRank ? ` • 🌐 **#${serverRank.toLocaleString()}**` : '';
+        const serverRankStr = serverRank 
+            ? ` • 🌐 **#${serverRank.toLocaleString()}**` 
+            : ` • 👤 **#${index} Personal**`;
 
-        const line1 = `**${index}.** ${rankEmoji} **${modsStr}** Score **[${starStr}★]**`;
-        const line2 = `▸ PP ▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
-        const line3 = `└ ▸ Score: \`${totalScore}\` • \`${hitsStr}\`${serverRankStr}`;
+        const scoreId = score.id || score.best_id;
+        const scoreUrl = scoreId ? `https://osu.ppy.sh/scores/osu/${scoreId}` : score.beatmap?.url;
+        const scoreLink = scoreUrl ? ` • [Score](${scoreUrl})` : '';
+
+        const line1 = `**${index})** ${rankEmoji} **${modsStr}** **[${starStr}★]**`;
+        const line2 = `▸ ${ppDisplay} • **${acc}%** • ${comboDisplay} • *${timeStr}*`;
+        const line3 = `▸ **${totalScore}** • \`${hitsStr}\`${serverRankStr}${scoreLink}`;
 
         return `${line1}\n${line2}\n${line3}`;
     }));

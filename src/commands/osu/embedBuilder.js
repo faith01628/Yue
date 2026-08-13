@@ -130,16 +130,20 @@ export async function buildDetailedScoreEmbed(user, score, beatmap, beatmapset, 
     const secs = (totalSecs % 60).toString().padStart(2, '0');
     const lengthStr = `${mins}:${secs}`;
 
-    const mapStatsBar = `\`🕒 ${lengthStr}\` • \`CS:${csStr} AR:${arStr} OD:${odStr} HP:${hpStr}\` • \`🎵${moddedBPM}\``;
+    const mapStatsBar = `▸ \`🕒 ${lengthStr}\` • \`🎵 ${moddedBPM} BPM\` • \`CS:${csStr} AR:${arStr} OD:${odStr} HP:${hpStr}\``;
 
     // Tiêu đề có kèm +MOD và Star rating modded
     const modTitleTag = modsStr !== '+NoMod' ? ` ${modsStr}` : '';
     const fullTitle = `${titlePrefix}${beatmapset.artist} - ${beatmapset.title} [${beatmap.version}]${modTitleTag} [${starStr}★]`;
 
+    const ppLine = (isChoked && fcPpNum > currentPpNum)
+        ? `▸ **${currentPpStr}PP** *(${fcPpStr}PP for ${fcAccStr}% FC)*`
+        : `▸ **${currentPpStr}PP**`;
+
     return new EmbedBuilder()
         .setColor(score.passed ? '#3498db' : '#e74c3c')
         .setAuthor({
-            name: `${user.username}: ${user.statistics?.pp ? Math.round(user.statistics.pp).toLocaleString() : '0'}pp (#${user.statistics?.global_rank?.toLocaleString() || 'N/A'} ${user.country_code || 'VN'}${user.statistics?.country_rank || ''})`,
+            name: `${user.username}: ${user.statistics?.pp ? Math.round(user.statistics.pp).toLocaleString() : '0'}pp (#${user.statistics?.global_rank?.toLocaleString() || 'N/A'} ${user.country_code || 'VN'}#${user.statistics?.country_rank || ''})`,
             iconURL: user.avatar_url,
             url: `https://osu.ppy.sh/users/${user.id}`
         })
@@ -148,9 +152,10 @@ export async function buildDetailedScoreEmbed(user, score, beatmap, beatmapset, 
         .setThumbnail(beatmapset.covers.list)
         .setDescription(
             `${rankEmoji} **${modsStr}** • **${score.score.toLocaleString()}** • **${acc}%** • *${timeText}*\n` +
-            `▸ ${ppDisplay} • ${comboDisplay} • ${EMOJIS.MISS} **${countMiss}** [${count300}/${count100}/${count50}/${countMiss}]${serverRankStr}\n` +
+            `${ppLine}\n` +
+            `▸ ${comboDisplay} • ${EMOJIS.MISS} **${countMiss}** \`[${count300}/${count100}/${count50}/${countMiss}]\`${serverRankStr}\n` +
             `${mapStatsBar}`
         )
-        .setFooter({ text: `osu! • ${beatmapset.status || 'Ranked'} by ${beatmapset.creator || 'N/A'}` })
+        .setFooter({ text: `osu! Bancho • ${beatmapset.status || 'Ranked'} by ${beatmapset.creator || 'N/A'}` })
         .setTimestamp();
 }

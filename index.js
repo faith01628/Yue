@@ -28,7 +28,8 @@ import {
     handleOsuLeaderboardCommand,
     handleOsuNoChokeCommand,
     handleOsuCalcPPCommand,
-    handleOsuLinkSlashCommand
+    handleOsuLinkSlashCommand,
+    handleOsuStatCommand
 } from './src/commands/osu/index.js';
 import 'dotenv/config';
 
@@ -81,71 +82,78 @@ client.on('messageCreate', async (message) => {
 
     const content = message.content.trim();
 
-    // --- CÁC LỆNH HỆ THỐNG ---
-    if (content === '.infoyue') return await handleInfoCommand(message);
-    if (content === '.setupyue') return await handleSetupCommand(message);
-    if (content === '.join') return await handleJoinCommand(message);
-    if (content === '.listen') return await handleListenCommand(message);
-    if (content === '.out') return await handleLeaveCommand(message);
+    const firstWord = content.split(/ +/)[0].toLowerCase();
 
-    // --- CÁC LỆNH OSU! ---
-    if (content.startsWith('.osu') || content.startsWith('.profile') || content.startsWith('.p')) {
-        return await handleOsuProfileCommand(message);
+    // --- 1. CÁC LỆNH HỆ THỐNG ---
+    if (firstWord === '.infoyue') return await handleInfoCommand(message);
+    if (firstWord === '.setupyue') return await handleSetupCommand(message);
+    if (firstWord === '.join') return await handleJoinCommand(message);
+    if (firstWord === '.listen') return await handleListenCommand(message);
+    if (firstWord === '.out' || firstWord === '.leave') return await handleLeaveCommand(message);
+
+    // --- 2. CÁC LỆNH OSU! MULTIPLAYER & ROOM ---
+    if (firstWord === '.mr' || firstWord === '.make-room' || firstWord === '.makeroom' || firstWord === '.lobby') {
+        return await handleMakeRoomCommand(message);
     }
-
-    if (message.content.startsWith('.joinroom') || message.content.startsWith('!joinroom')) {
+    if (firstWord === '.inv' || firstWord === '.invite' || firstWord === '.invosu') {
+        return await handleInviteCommand(message);
+    }
+    if (firstWord === '.close' || firstWord === '.matchclose' || firstWord === '.mc') {
+        return await handleCloseMatchCommand(message);
+    }
+    if (firstWord === '.joinroom' || firstWord === '!joinroom') {
         return await handleJoinRoomCommand(message);
     }
 
-    // Kiểm tra .r có khoảng trắng phía sau hoặc chỉ duy nhất chữ .r
-    if (
-        content.startsWith('.rs') ||
-        content.startsWith('.recent') ||
-        content.startsWith('.r ') ||
-        content === '.r' ||
-        content.match(/^\.m\b/i)
-    ) {
+    // --- 3. CÁC LỆNH OSU! BANCHO STATS & BEATMAP ---
+    // Profile (.profile, .p, .osu, .user)
+    if (firstWord === '.profile' || firstWord === '.p' || firstWord === '.osu' || firstWord === '.user') {
+        return await handleOsuProfileCommand(message);
+    }
+
+    // Detailed Stats (.stat, .stats, .st)
+    if (firstWord === '.stat' || firstWord === '.stats' || firstWord === '.st') {
+        return await handleOsuStatCommand(message);
+    }
+
+    // Recent Play (.r, .recent, .rs, .rc, .rm, .rt)
+    if (firstWord === '.r' || firstWord === '.recent' || firstWord === '.rs' || firstWord === '.rc' || firstWord === '.rm' || firstWord === '.rt') {
         return await handleOsuRecentCommand(message);
     }
 
-    if (content.startsWith('.top') || content.startsWith('.t')) {
+    // Top Plays (.top, .t, hoặc .top10 / .t5)
+    if (firstWord === '.top' || firstWord === '.t' || /^\.t\d+$/i.test(firstWord) || /^\.top\d+$/i.test(firstWord) || /^\!top\d+$/i.test(firstWord) || /^\!t\d+$/i.test(firstWord)) {
         return await handleOsuTopCommand(message);
     }
-    if (content.startsWith('.wi') || content.startsWith('.whatif')) {
-        return await handleOsuWhatIfCommand(message);
-    }
 
-    // 🎯 LỆNH ĐÓNG PHÒNG MULTI
-    if (content.startsWith('.matchclose') || content.startsWith('.close') || content.startsWith('.mc')) {
-        return await handleCloseMatchCommand(message);
-    }
-
-    // 🎯 Lệnh Compare
-    if (content.startsWith('.compare') || content.match(/^\.c\b/i)) {
+    // Compare (.compare, .c)
+    if (firstWord === '.compare' || firstWord === '.c') {
         return await handleOsuCompareCommand(message);
     }
 
-    // 🎯 Lệnh Beatmap
-    if (content.startsWith('.map') || content.match(/^\.m\b/i)) {
+    // Beatmap Info (.map, .m)
+    if (firstWord === '.map' || firstWord === '.m') {
         return await handleOsuMapCommand(message);
     }
 
-    if (content.startsWith('.lb') || content.startsWith('.leaderboard')) {
+    // Leaderboard (.lb, .leaderboard)
+    if (firstWord === '.lb' || firstWord === '.leaderboard') {
         return await handleOsuLeaderboardCommand(message);
     }
-    if (content.startsWith('.nc') || content.startsWith('.nochoke')) {
+
+    // NoChoke (.nc, .nochoke)
+    if (firstWord === '.nc' || firstWord === '.nochoke') {
         return await handleOsuNoChokeCommand(message);
     }
-    if (content.startsWith('.pp') || content.startsWith('.calc')) {
-        return await handleOsuCalcPPCommand(message);
+
+    // WhatIf (.wi, .whatif)
+    if (firstWord === '.wi' || firstWord === '.whatif') {
+        return await handleOsuWhatIfCommand(message);
     }
 
-    // 🎯 Lệnh Make Room & Invite
-    if (content.startsWith('.mr') || content.startsWith('.make-room') || content.startsWith('.lobby')) {
-        return await handleMakeRoomCommand(message);
-    }
-    if (content.startsWith('.invosu') || content.startsWith('.inv') || content.startsWith('.invite')) {
-        return await handleInviteCommand(message);
+    // PP Simulator / Calc (.pp, .calc)
+    if (firstWord === '.pp' || firstWord === '.calc') {
+        return await handleOsuCalcPPCommand(message);
     }
 
     // ==========================================================

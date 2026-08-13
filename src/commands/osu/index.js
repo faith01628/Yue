@@ -4,6 +4,7 @@ export { handleOsuRecentCommand } from './recentCommand.js';
 export { handleOsuTopCommand } from './topCommand.js';
 export { handleOsuCompareCommand } from './compareCommand.js';
 export { handleOsuLinkSlashCommand } from './linkCommand.js';
+export { handleOsuStatCommand } from './statCommand.js';
 
 // Export nhóm lệnh liên quan đến Beatmap & PP Simulator
 export { 
