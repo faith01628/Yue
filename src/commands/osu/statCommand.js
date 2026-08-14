@@ -2,6 +2,8 @@ import { EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { getUserProfile, getUserTopPlays } from '../../services/osu/osuService.js';
 import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 import { createStatCardImage } from '../../utils/canvasStatCard.js';
+import { analyzeUserSkillProfile } from '../../utils/userSkillAnalyzer.js';
+import { saveUserSkillProfile } from '../../services/storage/userProfileStore.js';
 
 export async function handleOsuStatCommand(message) {
     const rawArgs = message.content.trim().split(/ +/).slice(1).join(' ').trim();
@@ -18,6 +20,16 @@ export async function handleOsuStatCommand(message) {
     if (!profile) return message.reply(`Không tìm thấy người chơi **${username}** trên Bancho ông ơi!`);
 
     const bestScores = topData?.bestScores || [];
+
+    // 💾 TỰ ĐỘNG TÍNH TOÁN & CẬP NHẬT KỸ NĂNG NGƯỜI DÙNG VÀO CACHE (.st) - KHỚP 100% CANVAS CARD
+    if (bestScores.length > 0) {
+        const skillAnalysis = analyzeUserSkillProfile(profile, bestScores);
+        saveUserSkillProfile(message.author.id, {
+            osuUsername: profile.username,
+            osuUserId: profile.id,
+            ...skillAnalysis
+        });
+    }
 
     // Vẽ thẻ ảnh Canvas Stat Card
     const imageBuffer = await createStatCardImage(profile, bestScores);
@@ -36,3 +48,4 @@ export async function handleOsuStatCommand(message) {
 
     return message.reply({ embeds: [embed], files: [attachment] });
 }
+

@@ -1,4 +1,5 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
+import { analyzeUserSkillProfile } from './userSkillAnalyzer.js';
 
 /**
  * Hàm quy đổi thông số Beatmap chính xác theo Mod (DT/NC/HR/HT) khớp 100% oWo / Bathbot
@@ -162,66 +163,25 @@ export async function createStatCardImage(profile, bestScores = []) {
     ctx.font = 'bold 13px sans-serif';
     ctx.fillText(`[${countryCode}]  •  osu! mode  •  Detailed Stats Card`, 125, 80);
 
-    // Tính toán quy đổi chỉ số trung bình theo Mod (DT/HR/HT) khớp 100% oWo / Bathbot
-    let dtCount = 0, hrCount = 0, hdCount = 0, fcCount = 0;
-    let totalStars = 0, totalMaxComboRatio = 0, totalLengthSecs = 0;
-    let totalAr = 0, totalOd = 0, totalCs = 0, totalBpm = 0;
-    const totalCount = bestScores.length || 1;
+    // Tính toán quy đổi chỉ số trung bình & skill breakdown từ userSkillAnalyzer
+    const analysis = analyzeUserSkillProfile(profile, bestScores);
 
-    bestScores.forEach(s => {
-        const mods = (s.mods || []).join('');
-        if (mods.includes('DT') || mods.includes('NC')) dtCount++;
-        if (mods.includes('HR')) hrCount++;
-        if (mods.includes('HD')) hdCount++;
-
-        const misses = s.statistics?.count_miss || s.statistics?.miss || 0;
-        if (misses === 0) fcCount++;
-
-        const mStats = calculateModScaledStats(s);
-
-        totalStars += mStats.stars;
-        totalLengthSecs += mStats.length;
-        totalBpm += mStats.bpm;
-        totalAr += mStats.ar;
-        totalOd += mStats.od;
-        totalCs += mStats.cs;
-
-        const maxCombo = s.beatmap?.max_combo || s.max_combo || 1;
-        totalMaxComboRatio += Math.min(1.0, (s.max_combo || 1) / maxCombo);
-    });
-
-    const avgStars = (totalStars / totalCount).toFixed(2);
-    const avgComboRatio = totalMaxComboRatio / totalCount;
-    const avgLengthSecs = Math.round(totalLengthSecs / totalCount);
-    const avgAr = (totalAr / totalCount).toFixed(2);
-    const avgOd = (totalOd / totalCount).toFixed(2);
-    const avgCs = (totalCs / totalCount).toFixed(2);
-    const avgBpm = Math.round(totalBpm / totalCount);
-    const fcRatio = fcCount / totalCount;
-
-    const minutes = Math.floor(avgLengthSecs / 60);
-    const seconds = (avgLengthSecs % 60).toString().padStart(2, '0');
+    const avgStars = analysis.avgStars.toFixed(2);
+    const minutes = Math.floor(analysis.avgLengthSecs / 60);
+    const seconds = (analysis.avgLengthSecs % 60).toString().padStart(2, '0');
     const avgLengthStr = `${minutes}m ${seconds}s`;
-
-    // 6 Skill values calculation (Bathbot exact + Gentle Bloom + Nerfed Reaction)
-    const hitAcc = stats.hit_accuracy || 90;
-    const rawAcc = Math.max(5, Math.min(100, (hitAcc - 80) * 2.5));
-    const rawTenacity = Math.max(5, Math.min(100, avgComboRatio * 35 + fcRatio * 35));
-    const topPp = bestScores[0]?.pp || 0;
-    const rawAim = Math.max(5, Math.min(100, (parseFloat(avgStars) / 9.5) * 55 + Math.min(25, (topPp / 1800) * 25)));
-    const rawReaction = Math.max(5, Math.min(100, Math.max(0, (parseFloat(avgAr) - 8.5)) / 2.5 * 55 + (dtCount / totalCount) * 15 + (avgBpm / 260) * 15));
-    const rawPrecision = Math.max(5, Math.min(100, (parseFloat(avgCs) / 7.0) * 35 + (parseFloat(avgOd) / 10.5) * 35 + (hrCount / totalCount) * 15));
-    const rawStamina = Math.max(5, Math.min(100, (avgLengthSecs / 180) * 45 + fcRatio * 15));
-
-    const gentleBloom = (v) => Math.min(100, Math.round(12 + v * 0.85));
+    const avgAr = analysis.avgAr.toFixed(2);
+    const avgOd = analysis.avgOd.toFixed(2);
+    const avgCs = analysis.avgCs.toFixed(2);
+    const avgBpm = analysis.avgBpm;
 
     const skillList = [
-        { name: 'REACTION', val: gentleBloom(rawReaction), color: '#00e5ff' },
-        { name: 'AGILITY / SPEED', val: gentleBloom(rawAim), color: '#ff4081' },
-        { name: 'ACCURACY', val: gentleBloom(rawAcc), color: '#00e676' },
-        { name: 'PRECISION', val: gentleBloom(rawPrecision), color: '#ffea00' },
-        { name: 'TENACITY', val: gentleBloom(rawTenacity), color: '#ab47bc' },
-        { name: 'STAMINA', val: gentleBloom(rawStamina), color: '#ff9100' }
+        { name: 'REACTION', val: analysis.skills.reaction, color: '#00e5ff' },
+        { name: 'AGILITY / SPEED', val: analysis.skills.speed, color: '#ff4081' },
+        { name: 'ACCURACY', val: analysis.skills.accuracy, color: '#00e676' },
+        { name: 'PRECISION', val: analysis.skills.precision, color: '#ffea00' },
+        { name: 'TENACITY', val: analysis.skills.tenacity, color: '#ab47bc' },
+        { name: 'STAMINA', val: analysis.skills.stamina, color: '#ff9100' }
     ];
 
     // ----------------------------------------------------
@@ -256,7 +216,7 @@ export async function createStatCardImage(profile, bestScores = []) {
         { label: 'APPROACH RATE (AR)', val: `AR ${avgAr}`, col: '#ffffff' },
         { label: 'OVERALL DIFF (OD)', val: `OD ${avgOd}`, col: '#ffffff' },
         { label: 'CIRCLE SIZE (CS)', val: `CS ${avgCs}`, col: '#ffffff' },
-        { label: 'MOD RATIOS', val: `DT ${Math.round((dtCount/totalCount)*100)}% • HR ${Math.round((hrCount/totalCount)*100)}% • HD ${Math.round((hdCount/totalCount)*100)}%`, col: '#ff4081' }
+        { label: 'MOD RATIOS', val: `DT ${analysis.dtRatio}% • HR ${analysis.hrRatio}% • HD ${analysis.hdRatio}%`, col: '#ff4081' }
     ];
 
     let py = 168;

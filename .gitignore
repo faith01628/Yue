@@ -22,3 +22,7 @@ src/data/
 !src/data/.gitkeep
 
 scratch/
+
+data/
+
+note.txt

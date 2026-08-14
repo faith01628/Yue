@@ -29,7 +29,9 @@ import {
     handleOsuNoChokeCommand,
     handleOsuCalcPPCommand,
     handleOsuLinkSlashCommand,
-    handleOsuStatCommand
+    handleOsuStatCommand,
+    handleNaturalLanguageMapRequest,
+    handlePickMapCommand
 } from './src/commands/osu/index.js';
 import 'dotenv/config';
 
@@ -156,6 +158,11 @@ client.on('messageCreate', async (message) => {
         return await handleOsuCalcPPCommand(message);
     }
 
+    // Pick Map Recommender Direct Command (.pm, .pickmap, .rec) - KHÔNG TỐN AI TOKEN!
+    if (firstWord === '.pm' || firstWord === '.pickmap' || firstWord === '.rec') {
+        return await handlePickMapCommand(message);
+    }
+
     // ==========================================================
     // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI AGENT (BRAIN INTEGRATION)
     // ==========================================================
@@ -233,7 +240,15 @@ client.on('messageCreate', async (message) => {
             const consecutiveGifCount = getConsecutiveGifCount(message.channel.id, message.author.id);
             const isGifSpam = isImage && consecutiveGifCount >= 3 && (!userPrompt || userPrompt.length < 15);
 
-            // 🧠 BƯỚC 3: REASONING ENGINE (TRẢ LỜI NGƯỜI DÙNG KÈM THEO KÝ ỨC)
+            // 🧠 BƯỚC 3: KIỂM TRA & XỬ LÝ YÊU CẦU GỢI Ý BEATMAP BẰNG NGÔN NGỮ TỰ NHIÊN
+            if (!isImage) {
+                const handledAsMapReq = await handleNaturalLanguageMapRequest(message, fullUserPromptWithReply, runtimeContext);
+                if (handledAsMapReq) {
+                    return;
+                }
+            }
+
+            // 🧠 BƯỚC 4: REASONING ENGINE (TRẢ LỜI NGƯỜI DÙNG KÈM THEO KÝ ỨC)
             let aiResponse = "";
             if (isImage) {
                 aiResponse = await askYueWithVision(

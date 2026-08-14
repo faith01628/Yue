@@ -10,12 +10,16 @@ import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 import { findBeatmapIdFromChannel } from './helper.js';
 import { EMOJIS, getRankEmoji } from '../../config/emojis.js';
 
-/**
- * Lệnh Map (!map)
- */
 export async function handleOsuMapCommand(message) {
+    return renderBeatmapCard(message);
+}
+
+/**
+ * Lệnh Map (!map) - Render Beatmap Embed Card
+ */
+export async function renderBeatmapCard(message, targetBeatmapId = null) {
     await message.channel.sendTyping();
-    const beatmapId = await findBeatmapIdFromChannel(message);
+    const beatmapId = targetBeatmapId || await findBeatmapIdFromChannel(message);
 
     if (!beatmapId) return message.reply("Tui không tìm thấy Beatmap nào trong 50 tin nhắn gần nhất cả!");
 

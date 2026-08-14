@@ -18,3 +18,4 @@ export {
 // Export thêm các helper/embedBuilder nếu cần dùng lại ở nơi khác
 export { buildDetailedScoreEmbed } from './embedBuilder.js';
 export { findBeatmapIdFromChannel } from './helper.js';
+export { handleNaturalLanguageMapRequest, handlePickMapCommand } from './recommendMapCommand.js';
