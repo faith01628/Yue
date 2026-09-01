@@ -1,9 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { handleMemoryCandidate } from '../brain/memoryManagerService.js';
 import { filterCleanHistory, updateTopicSummary } from '../brain/conversationContextService.js';
-import { getLocalChannelHistory, saveYueReplyToLocalHistory } from './chatHistoryManager.js';
+import { getLocalChannelHistory } from './chatHistoryManager.js';
 import { extractGifKeyframes, isAnimatedMedia } from './gifProcessor.js';
 import { memoryProvider } from '../brain/MemoryProvider.js';
+import { handleUserPreChatCheck, recordAiReplyState } from './challengeService.js';
 import { 
     BASE_SYSTEM_PROMPT, 
     VOICE_INSTRUCTION, 
@@ -12,7 +13,7 @@ import {
 } from '../prompts/yuePrompts.js';
 import 'dotenv/config';
 
-const apiKeys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') : [];
+const apiKeys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') : (process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.split(',') : []);
 let currentKeyIndex = 0;
 
 const aiModel = "gemini-3.1-flash-lite";
@@ -50,15 +51,33 @@ function getNextAIInstance(isVoice = false, isIngame = false, extraContext = nul
 
 function extractValidJson(rawText) {
     if (!rawText) return null;
+
+    let cleaned = rawText.trim();
+    if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    }
+
     try {
-        return JSON.parse(rawText);
+        let parsed = JSON.parse(cleaned);
+        if (Array.isArray(parsed)) {
+            parsed = parsed[0];
+        }
+        if (parsed && typeof parsed === 'object') {
+            return parsed;
+        }
     } catch {
         const firstOpen = rawText.indexOf('{');
         const lastClose = rawText.lastIndexOf('}');
         if (firstOpen !== -1 && lastClose > firstOpen) {
             const jsonCandidate = rawText.substring(firstOpen, lastClose + 1);
             try {
-                return JSON.parse(jsonCandidate);
+                let parsed = JSON.parse(jsonCandidate);
+                if (Array.isArray(parsed)) {
+                    parsed = parsed[0];
+                }
+                if (parsed && typeof parsed === 'object') {
+                    return parsed;
+                }
             } catch (err) {
                 return null;
             }
@@ -130,8 +149,10 @@ export async function askYue(
                 affText = `[MỨC HẢO CẢM CỦA USER NÀY: ${aff.score}/100000 EXP - CẤP ĐỘ: ${aff.level}]\n- Hướng dẫn thái độ phản ứng: ${aff.description}\n`;
             }
 
-            if (memories.length > 0 || affText) {
-                memoryInjectText = `\n${affText}[KÝ ỨC ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
+            if (memories.length > 0) {
+                memoryInjectText = `\n[DANH SÁCH KÝ ỨC VỀ USER NÀY (CHỈ DÙNG KHI LIÊN QUAN CHỦ ĐỀ)]:\n${affText}${memories.map(m => `- ${m}`).join('\n')}\n`;
+            } else if (affText) {
+                memoryInjectText = `\n${affText}\n`;
             }
         }
 
@@ -140,28 +161,60 @@ export async function askYue(
             pendingContextText = `\n[CÁC CÂU NÓI TRƯỚC ĐÓ CỦA USER CHƯA ĐƯỢC PHẢN HỒI]:\n${pendingUserText}\n`;
         }
 
-        const model = getNextAIInstance(isVoice, isIngame, ingameContext);
-
-        const chatConfig = { temperature: 0.2 };
-        if (!isVoice) {
-            chatConfig.responseMimeType = "application/json";
-        }
-
-        const chat = model.startChat({
-            history: formattedHistory,
-            generationConfig: chatConfig
-        });
-
         const isCreator = String(userId) === '756427625970270248' || String(username).toLowerCase().includes('katashi');
         const creatorTag = isCreator ? ' [Creator/Chủ nhân]' : '';
 
-        const currentMessageWithContext = `${contextHeader}${memoryInjectText}${pendingContextText}[User Discord ID: ${userId} | ${username}${creatorTag}]: ${userPrompt}`;
-        const result = await chat.sendMessage(currentMessageWithContext);
+        // 🛡️ KIỂM TRA TRẠNG THÁI THÁCH THỨC ĐE DỌA BLOCK
+        const challengeInfo = handleUserPreChatCheck(userId, userPrompt);
+        let challengeInjectText = "";
+        if (challengeInfo.isChallenge) {
+            if (challengeInfo.shouldBlock) {
+                challengeInjectText = `\n[CẢNH BÁO HỆ THỐNG - THÁCH THỨC LẦN 2]: User vừa THÁCH THỨC BẠN LẦN THỨ 2 ("${userPrompt}"). BẠN BẮT BUỘC PHẢI THỰC THI LỆNH BLOCK bằng cách trả về "executeBlock": true trong JSON, đồng thời ra tuyên bố chính thức đưa user vào danh sách đen!\n`;
+            } else {
+                challengeInjectText = `\n[CẢNH BÁO HỆ THỐNG - THÁCH THỨC LẦN 1]: Bạn đã dọa cho user vào danh sách đen và User vừa THÁCH THỨC BẠN LẦN THỨ 1 ("${userPrompt}"). HÃY CẢNH BÁO NGHIÊM TÚC LẦN CỦA RẰNG ĐỪNG CÓ THÁCH BẠN ("ông đừng có thách tôi...")!\n`;
+            }
+        }
+
+        const currentMessageWithContext = `${contextHeader}${memoryInjectText}${pendingContextText}${challengeInjectText}[User Discord ID: ${userId} | ${username}${creatorTag}]: ${userPrompt}`;
+
+        let result;
+        let attempts = 0;
+        const maxAttempts = Math.max(apiKeys.length, 1);
+        let lastErr = null;
+
+        while (attempts < maxAttempts) {
+            const usedKeyIndex = currentKeyIndex;
+            try {
+                const model = getNextAIInstance(isVoice, isIngame, ingameContext);
+                const chatConfig = { temperature: 0.2 };
+                if (!isVoice) {
+                    chatConfig.responseMimeType = "application/json";
+                }
+                const chat = model.startChat({
+                    history: formattedHistory,
+                    generationConfig: chatConfig
+                });
+                result = await chat.sendMessage(currentMessageWithContext);
+                lastErr = null;
+                break;
+            } catch (err) {
+                lastErr = err;
+                attempts++;
+                const isKeyError = err.status === 403 || err.status === 429 || err.status === 401 || (err.message && (err.message.includes('403') || err.message.includes('429') || err.message.includes('Forbidden')));
+                if (isKeyError && attempts < maxAttempts) {
+                    console.warn(`⚠️ [Yue AI] Key index ${usedKeyIndex} bị lỗi (${err.status || err.message}). Tự động thử Key tiếp theo (${attempts}/${maxAttempts})...`);
+                    continue;
+                }
+                throw err;
+            }
+        }
+
+        if (!result && lastErr) throw lastErr;
         const rawResponseText = result.response.text();
 
         const parsedRes = extractValidJson(rawResponseText);
-
         const replyText = parsedRes?.reply || rawResponseText;
+
         if (channelId) {
             updateTopicSummary(channelId, userPrompt, replyText);
         }
@@ -199,7 +252,17 @@ export async function askYue(
                 ? `🧠 Lưu Ký Ức: ${savedMemories.join(' | ')}`
                 : `🧠 Ký Ức: Không lưu mới`;
 
-            const replyPreview = (parsedRes.reply || rawResponseText).replace(/\r?\n/g, ' ').slice(0, 55);
+            const replyPreview = replyText.replace(/\r?\n/g, ' ').slice(0, 55);
+
+            // 🛡️ XỬ LÝ TỰ ĐỘNG BLOCK KHI THÁCH THỨC ĐỦ 2 LẦN HOẶC AI RA LỆNH BLOCK
+            const shouldBlock = Boolean(parsedRes.executeBlock) || challengeInfo.shouldBlock;
+            if (shouldBlock && !isCreator) {
+                memoryProvider.blacklistUser(userId);
+                recordAiReplyState(userId, replyText, true);
+                console.log(`⛔ [Yue AI] Đã tự động đưa User: ${username} (${userId}) vào Blacklist do bị thách thức 2 lần!`);
+            } else {
+                recordAiReplyState(userId, replyText, false);
+            }
 
             // 💬 COMPACT 1-LINE LOG PER TURN
             console.log(`💬 [Yue AI] User: ${username} | ${affText} | ${memText} | Reply: "${replyPreview}..."`);
@@ -210,15 +273,6 @@ export async function askYue(
                 return JSON.stringify({
                     reply: rawResponseText.replace(/```json/gi, '').replace(/```/g, '').trim(),
                     command: ""
-                });
-            }
-
-            if (userPrompt.includes("Nguyễn Thanh Huy") || userPrompt.includes("2003")) {
-                handleMemoryCandidate(userId, {
-                    category: "identity",
-                    fact: { key: "creator_profile", value: "Tên thật Nguyễn Thanh Huy (Huy), sinh năm 2003 (23 tuổi), Freelance, chơi PUBG, CS2, osu!, Delta Force" },
-                    importance: 10,
-                    type: "permanent"
                 });
             }
 
@@ -236,7 +290,7 @@ export async function askYue(
 export async function extractMediaFromMessage(message) {
     if (!message) return null;
 
-    // 1. Check direct file attachments (standard file upload)
+    // 1. Check direct file attachments
     const attachment = message.attachments?.first ? message.attachments.first() : null;
     if (attachment && attachment.contentType?.startsWith('image/')) {
         return {
@@ -245,7 +299,7 @@ export async function extractMediaFromMessage(message) {
         };
     }
 
-    // 2. Check Discord Embeds (Discord GIF picker Tenor/Giphy or link embeds)
+    // 2. Check Discord Embeds
     if (message.embeds && message.embeds.length > 0) {
         for (const embed of message.embeds) {
             const mediaUrl = embed.image?.url || embed.thumbnail?.url || (embed.type === 'gifv' || embed.type === 'image' ? embed.url : null);
@@ -264,13 +318,12 @@ export async function extractMediaFromMessage(message) {
         }
     }
 
-    // 3. Check image/gif URL strings in message content
+    // 3. Check image/gif URL strings in content
     const urlRegex = /(https?:\/\/[^\s]+(?:\.(?:gif|png|jpg|jpeg|webp))|https?:\/\/(?:media\.)?tenor\.com\/[^\s]+|https?:\/\/media\d?\.giphy\.com\/[^\s]+)/gi;
     const matches = message.content?.match(urlRegex);
     if (matches && matches.length > 0) {
         let rawUrl = matches[0];
         
-        // Resolve Tenor view URL to direct gif link if embeds are missing
         if (rawUrl.includes('tenor.com/view')) {
             try {
                 const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -299,24 +352,6 @@ export async function extractMediaFromMessage(message) {
     return null;
 }
 
-async function urlToGenerativePart(url, mimeType) {
-    const response = await fetch(url);
-    const contentType = response.headers.get('content-type');
-    const buffer = await response.arrayBuffer();
-
-    let finalMime = mimeType || "image/gif";
-    if (contentType && contentType.startsWith('image/')) {
-        finalMime = contentType.split(';')[0].trim().toLowerCase();
-    }
-
-    return {
-        inlineData: {
-            data: Buffer.from(buffer).toString("base64"),
-            mimeType: finalMime
-        },
-    };
-}
-
 export async function askYueWithVision(
     userId,
     username,
@@ -327,8 +362,6 @@ export async function askYueWithVision(
     runtimeContext = null
 ) {
     try {
-        const model = getNextAIInstance(false, false, null);
-
         // Download raw media buffer
         const response = await fetch(imageUrl);
         const contentType = response.headers.get('content-type');
@@ -340,16 +373,18 @@ export async function askYueWithVision(
             finalMime = contentType.split(';')[0].trim().toLowerCase();
         }
 
-        const isAnimated = isAnimatedMedia(inputBuffer, finalMime, imageUrl);
+        const isGifOrAnimated = finalMime.includes('gif') || (imageUrl || '').toLowerCase().includes('.gif') || isAnimatedMedia(inputBuffer, finalMime, imageUrl);
 
         let imageParts = [];
-        if (isAnimated) {
+        if (isGifOrAnimated) {
             imageParts = await extractGifKeyframes(inputBuffer, finalMime, 4, imageUrl);
         } else {
+            let safeMime = finalMime;
+            if (safeMime.includes('gif')) safeMime = 'image/png';
             imageParts = [{
                 inlineData: {
                     data: inputBuffer.toString("base64"),
-                    mimeType: finalMime
+                    mimeType: safeMime
                 }
             }];
         }
@@ -370,34 +405,62 @@ export async function askYueWithVision(
                 affText = `[MỨC HẢO CẢM CỦA USER NÀY: ${aff.score}/100000 EXP - CẤP ĐỘ: ${aff.level}]\n- Hướng dẫn thái độ phản ứng: ${aff.description}\n`;
             }
 
-            if (memories.length > 0 || affText) {
-                memoryInjectText = `\n${affText}[KÝ ỨC ĐÃ LƯU VỀ USER NÀY]:\n- ${memories.join('\n- ')}\n`;
+            if (memories.length > 0) {
+                memoryInjectText = `\n[DANH SÁCH KÝ ỨC VỀ USER NÀY (CHỈ DÙNG KHI LIÊN QUAN CHỦ ĐỀ)]:\n${affText}${memories.map(m => `- ${m}`).join('\n')}\n`;
+            } else if (affText) {
+                memoryInjectText = `\n${affText}\n`;
             }
         }
 
         const hasMultipleFrames = imageParts.length > 1;
 
-        let visionInstruction = "";
-        if (hasMultipleFrames) {
-            const spamNote = isGifSpam ? `\n[Ghi chú]: User vừa gửi dồn dập nhiều GIF không kèm chữ. Nếu đây là GIF thể hiện cảm xúc cho câu chuyện thì hãy tương tác với cảm xúc đó; nếu chỉ là spam rác vô nghĩa thì trêu chọc/nhắc nhở vui vẻ linh hoạt.` : ``;
-            visionInstruction = `
-[LƯU Ý VISION GIF]: Đây là chuỗi ${imageParts.length} khung hình (keyframes) bóc tách từ 1 GIF động.
-[HƯỚNG DẪN TƯƠNG TÁC CHUẨN NGƯỜI THẬT]:
-1. ĐỌC EMOTION/NGÔN NGỮ CƠ THỂ TRONG GIF: Coi GIF này như cảm xúc/cử chỉ mà ${username} muốn thể hiện trong cuộc trò chuyện lúc này.
-2. TƯƠNG TÁC VỚI CẢM XÚC: Đừng nhận xét bức ảnh như bài kiểm tra ("ảnh này buồn cười/xấu"). HÃY TRẢ LỜI TRỰC TIẾP VÀO CẢM XÚC THỰC TẾ của ${username} (ví dụ: trêu đùa, hỏi thăm lý do, chia sẻ cảm xúc, nương theo trò đùa).${spamNote}`;
-        } else {
-            visionInstruction = `
-[HƯỚNG DẪN XỬ LÝ ẢNH TĨNH]:
-1. QUAN SÁT ẢNH: Đọc nội dung tấm ảnh/hình chụp/meme/bức hình mà ${username} vừa gửi (chú ý chữ trong ảnh, chi tiết nổi bật, cảm xúc hoặc ngữ cảnh câu chuyện).
-2. TƯƠNG TÁC TỰ NHIÊN NHƯ VỢ NÓI CHUYỆN VỚI CHỒNG/BẠN BÈ: Phản hồi tự nhiên, hài hước, dỗi hờn hoặc bình luận trực tiếp vào chi tiết trong ảnh theo đúng văn phong Yue AI. Đừng nhận xét bài kiểm tra khô khan.`;
+        const visionInstruction = isGifSpam
+            ? "\n[CẢNH BÁO SPAM GIF]: User này đang spam GIF liên tục mà ít gõ chữ. Bạn có thể trêu ghẹo hoặc cằn nhằn nhẹ nhàng bằng nhiều cách nói tự nhiên khác nhau, tránh lặp lại câu từ cũ."
+            : "";
+
+        // 🛡️ KIỂM TRA TRẠNG THÁI THÁCH THỨC TRONG VISION
+        const challengeInfo = handleUserPreChatCheck(userId, cleanPromptText || userPrompt);
+        let challengeInjectText = "";
+        if (challengeInfo.isChallenge) {
+            if (challengeInfo.shouldBlock) {
+                challengeInjectText = `\n[CẢNH BÁO HỆ THỐNG - THÁCH THỨC LẦN 2]: User vừa THÁCH THỨC BẠN LẦN THỨ 2. BẠN BẮT BUỘC PHẢI THỰC THI LỆNH BLOCK bằng cách trả về "executeBlock": true trong JSON!\n`;
+            } else {
+                challengeInjectText = `\n[CẢNH BÁO HỆ THỐNG - THÁCH THỨC LẦN 1]: User vừa THÁCH THỨC BẠN LẦN THỨ 1. HÃY CẢNH BÁO NGHIÊM TÚC RẰNG ĐỪNG CÓ THÁCH BẠN!\n`;
+            }
         }
 
-        const promptText = `${contextHeader}${memoryInjectText}[User ID: ${userId} | ${username}]: ${cleanPromptText || (hasMultipleFrames ? '[Gửi 1 GIF biểu cảm]' : '[Gửi 1 bức ảnh]')}\n${visionInstruction}`;
+        const promptText = `${contextHeader}${memoryInjectText}${challengeInjectText}[User ID: ${userId} | ${username}]: ${cleanPromptText || (hasMultipleFrames ? '[Gửi 1 GIF biểu cảm]' : '[Gửi 1 bức ảnh]')}\n${visionInstruction}`;
 
-        const result = await model.generateContent([promptText, ...imageParts]);
+        let result;
+        let attempts = 0;
+        const maxAttempts = Math.max(apiKeys.length, 1);
+        let lastErr = null;
+
+        while (attempts < maxAttempts) {
+            const usedKeyIndex = currentKeyIndex;
+            try {
+                const model = getNextAIInstance(false, false, null);
+                result = await model.generateContent([promptText, ...imageParts]);
+                lastErr = null;
+                break;
+            } catch (err) {
+                lastErr = err;
+                attempts++;
+                const isKeyError = err.status === 403 || err.status === 429 || err.status === 401 || (err.message && (err.message.includes('403') || err.message.includes('429') || err.message.includes('Forbidden')));
+                if (isKeyError && attempts < maxAttempts) {
+                    console.warn(`⚠️ [Yue AI Vision] Key index ${usedKeyIndex} bị lỗi (${err.status || err.message}). Tự động thử Key tiếp theo (${attempts}/${maxAttempts})...`);
+                    continue;
+                }
+                throw err;
+            }
+        }
+
+        if (!result && lastErr) throw lastErr;
         const rawResponseText = result.response.text();
 
         const parsedRes = extractValidJson(rawResponseText);
+        const replyText = parsedRes?.reply || rawResponseText;
+
         if (parsedRes) {
             let affText = "";
             if (typeof parsedRes.affectionDelta === 'number' && parsedRes.affectionDelta !== 0) {
@@ -422,7 +485,18 @@ export async function askYueWithVision(
                 ? `🧠 Lưu Ký Ức: ${savedMemories.join(' | ')}`
                 : `🧠 Ký Ức: Không lưu mới`;
 
-            const replyPreview = (parsedRes.reply || rawResponseText).replace(/\r?\n/g, ' ').slice(0, 55);
+            const replyPreview = replyText.replace(/\r?\n/g, ' ').slice(0, 55);
+
+            const isCreator = String(userId) === '756427625970270248';
+            const shouldBlock = Boolean(parsedRes.executeBlock) || challengeInfo.shouldBlock;
+            if (shouldBlock && !isCreator) {
+                memoryProvider.blacklistUser(userId);
+                recordAiReplyState(userId, replyText, true);
+                console.log(`⛔ [Yue AI Vision] Đã tự động đưa User: ${username} (${userId}) vào Blacklist do bị thách thức 2 lần!`);
+            } else {
+                recordAiReplyState(userId, replyText, false);
+            }
+
             console.log(`💬 [Yue AI Vision] User: ${username} | ${affText} | ${memText} | Reply: "${replyPreview}..."`);
 
             return parsedRes.reply || rawResponseText;

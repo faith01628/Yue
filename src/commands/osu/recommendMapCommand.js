@@ -36,8 +36,9 @@ export async function handleNaturalLanguageMapRequest(message, userPrompt, runti
         // 💾 Lưu Beatmap ID này vào lịch sử đã gợi ý của User để lần sau KHÔNG repick lại!
         addRecommendedBeatmapToHistory(message.author.id, recommended.beatmapId);
 
-        // 3. Tính toán PP thực tế để đưa vào ngữ cảnh Yue AI tư vấn chính xác
-        const [nm100, nm90, dt100, dt90, hr100] = await Promise.all([
+        // 3. Tính toán PP thực tế & lấy Chi tiết Beatmap SONG SONG (Parallel Execution)
+        const [beatmapDetail, nm100, nm90, dt100, dt90, hr100] = await Promise.all([
+            getBeatmapDetail(recommended.beatmapId).catch(() => null),
             calculateBeatmapPP(recommended.beatmapId, { accuracy: 100 }).catch(() => null),
             calculateBeatmapPP(recommended.beatmapId, { accuracy: 90 }).catch(() => null),
             calculateBeatmapPP(recommended.beatmapId, { accuracy: 100, mods: 'DT' }).catch(() => null),
@@ -45,7 +46,6 @@ export async function handleNaturalLanguageMapRequest(message, userPrompt, runti
             calculateBeatmapPP(recommended.beatmapId, { accuracy: 100, mods: 'HR' }).catch(() => null)
         ]);
 
-        const beatmapDetail = await getBeatmapDetail(recommended.beatmapId).catch(() => null);
         const mapTitle = beatmapDetail ? `${beatmapDetail.beatmapset?.title} [${beatmapDetail.version}]` : 'Beatmap';
 
         const nm100Val = Math.round(nm100?.pp || 0);
@@ -55,18 +55,16 @@ export async function handleNaturalLanguageMapRequest(message, userPrompt, runti
         const hr100Val = Math.round(hr100?.pp || 0);
 
         let profileNote = filters.isUsingProfile
-            ? `(Dựa theo trình độ ${filters.userAvgStars}★ & điểm yếu Stamina từ .st)`
+            ? `(Dựa theo trình độ ${filters.userAvgStars}★ từ .st)`
             : `(${filters.minStars}-${filters.maxStars}★)`;
 
         const aiContextPrompt = `[THÔNG TIN BÀI HÁT ĐÃ CHỌN KHỚP YÊU CẦU: "${mapTitle}" (${recommended.stars || 'N/A'}★)]
 - Dự đoán PP NoMod: 100% SS = ${nm100Val}PP | 90% Acc = ${nm90Val}PP
 - Dự đoán PP +DT: 100% SS = ${dt100Val}PP | 90% Acc = ${dt90Val}PP
 - Dự đoán PP +HR: 100% SS = ${hr100Val}PP
-- Yêu cầu của người dùng: "${userPrompt}" ${filters.targetPp ? `(Muốn tầm ${filters.targetPp}PP)` : ''} ${profileNote}.
+- Yêu cầu của người dùng: "${userPrompt}" ${filters.targetPp ? `(Mục tiêu: ${filters.targetPp}PP)` : ''} ${profileNote}.
 
-NHIỆM VỤ: Trả lời 1-2 câu ngắn gọn, thông minh, đúng phong cách Yue.
-ĐƯA RA LỜI KHUYÊN CỤ THỂ CHO NGƯỜI DÙNG VỀ CÁCH FARM MAP NÀY ĐỂ ĐẠT MỤC TIÊU PP!
-(Ví dụ: "Map '${mapTitle}' này NoMod 100% SS cho ${nm100Val}PP, nên nếu ông đánh 90% Acc là đúng vừa tròn ~${nm90Val}PP cho ông luôn đó! Hoặc thử bật thêm +DT để đẩy lên ${dt90Val}PP nhé!")`;
+NHIỆM VỤ: Trả lời 1-2 câu ngắn gọn, chuẩn phong cách Yue AI tư vấn người dùng farm map này.`;
 
         let aiIntro = await askYue(
             message.author.id,
@@ -78,11 +76,10 @@ NHIỆM VỤ: Trả lời 1-2 câu ngắn gọn, thông minh, đúng phong cách
             runtimeContext
         ).catch(() => `Đây nè ông ơi! Bài **${mapTitle}** này NoMod 100% SS cho **${nm100Val}PP** (90% Acc được **${nm90Val}PP**), đúng chuẩn yêu cầu luôn nè! ✨`);
 
-        // Gửi câu trả lời AI tự nhiên
+        // Gửi câu trả lời AI tự nhiên & Render Card
         await message.reply(aiIntro);
-
-        // 4. Tái sử dụng lệnh .m để render thẻ Embed Beatmap
         await renderBeatmapCard(message, recommended.beatmapId);
+
 
         return true;
 
@@ -118,11 +115,11 @@ export async function handlePickMapCommand(message) {
 
         let profileNote = '';
         if (filters.isUsingProfile && filters.userProfile) {
-            const uSkills = filters.userProfile.skills;
-            profileNote = `🎯 [Trình độ: **${filters.userAvgStars}★** | Stamina: **${uSkills?.stamina || 0}/100**${uSkills?.stamina < 40 ? ' (Yếu -> Tự động ưu tiên TV Size/Short map)' : ''}]`;
+            profileNote = `🎯 [Trình độ: **${filters.userAvgStars}★**]`;
         } else {
             profileNote = `🎯 [Mức sao: **${filters.minStars}-${filters.maxStars}★**]`;
         }
+
 
         const skillText = filters.skill ? filters.skill.toUpperCase() : 'Lọc theo Kỹ năng người dùng';
         const bpmText = filters.targetBpm ? ` | BPM ~${filters.targetBpm}` : '';

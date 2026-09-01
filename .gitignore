@@ -5,6 +5,7 @@ tests/
 
 # Environment variables
 .env
+.env-main
 
 # Log files
 *.log
@@ -26,3 +27,5 @@ scratch/
 data/
 
 note.txt
+
+CONFIG_GUIDE.md

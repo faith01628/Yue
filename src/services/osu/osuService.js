@@ -222,17 +222,39 @@ export async function getUserBeatmapScores(username, beatmapId) {
 }
 
 
+const beatmapDetailCache = new Map();
+const BEATMAP_DETAIL_TTL = 10 * 60 * 1000; // 10 phút
+
 /**
- * 5. Lấy Beatmap Detail
+ * 5. Lấy Beatmap Detail (Có RAM Cache 10 phút)
  */
 export async function getBeatmapDetail(beatmapId) {
+    if (!beatmapId) return null;
+    const numId = Number(beatmapId);
+    
+    // Check RAM Cache
+    const cached = beatmapDetailCache.get(numId);
+    if (cached && (Date.now() - cached.timestamp < BEATMAP_DETAIL_TTL)) {
+        return cached.detail;
+    }
+
     try {
-        return await fetchOsuAPI(`/beatmaps/${beatmapId}`);
+        const detail = await fetchOsuAPI(`/beatmaps/${numId}`);
+        if (detail) {
+            beatmapDetailCache.set(numId, { detail, timestamp: Date.now() });
+            // Giới hạn RAM tối đa 500 bài
+            if (beatmapDetailCache.size > 500) {
+                const firstKey = beatmapDetailCache.keys().next().value;
+                beatmapDetailCache.delete(firstKey);
+            }
+        }
+        return detail;
     } catch (error) {
         console.error(`❌ Lỗi lấy thông tin Beatmap ${beatmapId}:`, error.response?.data || error.message);
         return null;
     }
 }
+
 
 /**
  * 6. Lấy Leaderboard (Hỗ trợ Global, Country VN, và Mod Filter)

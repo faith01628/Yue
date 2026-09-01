@@ -1,22 +1,13 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { getVoiceConnection } from '@discordjs/voice';
 import { askYue, askYueWithVision, extractMediaFromMessage } from './src/services/aiService.js';
-import { checkVoiceChannelState } from './src/services/voiceAutoLeaveService.js';
 import { saveMessageToLocalHistory, saveYueReplyToLocalHistory, getConsecutiveGifCount } from './src/services/chatHistoryManager.js';
-import { handleJoinCommand } from './src/commands/join.js';
-import { handleLeaveCommand } from './src/commands/leave.js';
+import { checkAntiSpam } from './src/services/antiSpamService.js';
 import { handleInfoCommand } from './src/commands/info.js';
 import { handleSetupCommand } from './src/commands/setup.js';
-import { handleListenCommand } from './src/commands/listen.js';
-import { handleMakeRoomCommand } from './src/commands/osu/makeRoomCommand.js';
-import { handleInviteCommand } from './src/commands/osu/inviteCommand.js';
-import { handleCloseMatchCommand } from './src/commands/osu/closeMatchCommand.js';
-import { handleJoinRoomCommand } from './src/commands/osu/joinRoomCommand.js';
 
 // 🧠 IMPORT BỘ NÃO & QUẢN LÝ BỘ NHỚ CỦA YUE
 import { buildContext } from './src/brain/contextBuilder.js';
-// import { parseIntent } from './src/brain/intentParserService.js';
-// import { processMemoryCandidate } from './src/brain/memoryManagerService.js';
+import { memoryProvider } from './src/brain/MemoryProvider.js';
 
 import {
     handleOsuProfileCommand,
@@ -53,7 +44,11 @@ const client = new Client({
 client.once('clientReady', () => {
     console.log(`\n🤖 Yue AI đã sẵn sàng hoạt động!`);
     console.log(`💬 Chat text tại kênh "con-vợ-ai"`);
-    console.log(`🎙️ Gõ lệnh ".join" khi đang ở trong phòng thoại để trò chuyện trực tiếp.\n`);
+    if (process.env.ENABLE_VOICE === 'true') {
+        console.log(`🎙️ Gõ lệnh ".join" khi đang ở trong phòng thoại để trò chuyện trực tiếp.\n`);
+    } else {
+        console.log(`⚡ [Lite Mode] Chế độ Voice đang TẮT để tối ưu RAM server.\n`);
+    }
 });
 
 // ==========================================================
@@ -83,27 +78,116 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
     const content = message.content.trim();
-
     const firstWord = content.split(/ +/)[0].toLowerCase();
 
     // --- 1. CÁC LỆNH HỆ THỐNG ---
     if (firstWord === '.infoyue') return await handleInfoCommand(message);
     if (firstWord === '.setupyue') return await handleSetupCommand(message);
-    if (firstWord === '.join') return await handleJoinCommand(message);
-    if (firstWord === '.listen') return await handleListenCommand(message);
-    if (firstWord === '.out' || firstWord === '.leave') return await handleLeaveCommand(message);
+
+    // --- CÁC LỆNH QUẢN LÝ DANH SÁCH ĐEN / BLACKLIST ---
+    if (firstWord === '.listblacklist' || firstWord === '.blacklisted') {
+        const blacklisted = memoryProvider.getBlacklistedUsers();
+        if (blacklisted.length === 0) {
+            return await message.reply("🟢 Hiện tại không có User nào nằm trong Danh sách đen / Blacklist!");
+        }
+
+        const listText = blacklisted.map((u, i) => `${i + 1}. **${u.lastKnownName}** (ID: \`${u.discordId}\`) - Hảo cảm: ${u.score} EXP`).join('\n');
+        return await message.reply(`⛔ **DANH SÁCH USER ĐANG BỊ CẤM / BLACKLIST (${blacklisted.length}):**\n${listText}\n\n👉 Dùng \`.unblacklist <ID>\` để mở cấm hoặc \`.resetscore <ID>\` để reset điểm.`);
+    }
+
+    if (firstWord === '.blacklist' || firstWord === '.block') {
+        const isCreator = String(message.author.id) === '756427625970270248' || String(message.author.username).toLowerCase().includes('katashi');
+        if (!isCreator) {
+            return await message.reply("Chỉ có Creator (Katashi) mới có quyền thêm user vào Blacklist nha!");
+        }
+
+        const mentionedUser = message.mentions.users.first();
+        const args = content.split(/ +/).slice(1);
+        const targetId = mentionedUser ? mentionedUser.id : (args[0] ? args[0].replace(/[^0-9]/g, '') : null);
+
+        if (!targetId) {
+            return await message.reply("Cú pháp: `.blacklist <ID_hoặc_tag_User>`");
+        }
+
+        memoryProvider.blacklistUser(targetId);
+        return await message.reply(`⛔ Đã đưa User ID \`${targetId}\` vào Blacklist (Hảo cảm 0 EXP). Yue sẽ xem người này là vô hình!`);
+    }
+
+    if (firstWord === '.unblacklist' || firstWord === '.unblock') {
+        const isCreator = String(message.author.id) === '756427625970270248' || String(message.author.username).toLowerCase().includes('katashi');
+        if (!isCreator) {
+            return await message.reply("Chỉ có Creator (Katashi) mới có quyền gỡ Blacklist nha!");
+        }
+
+        const mentionedUser = message.mentions.users.first();
+        const args = content.split(/ +/).slice(1);
+        const targetId = mentionedUser ? mentionedUser.id : (args[0] ? args[0].replace(/[^0-9]/g, '') : null);
+
+        if (!targetId) {
+            return await message.reply("Cú pháp: `.unblacklist <ID_hoặc_tag_User>`");
+        }
+
+        const res = memoryProvider.unblacklistUser(targetId);
+        return await message.reply(`🟢 Đã gỡ Blacklist cho User ID \`${targetId}\`. Mức hảo cảm được khôi phục: ${res.profile.affectionScore} EXP (${res.profile.relationshipLevel}).`);
+    }
+
+    if (firstWord === '.resetscore') {
+        const isCreator = String(message.author.id) === '756427625970270248' || String(message.author.username).toLowerCase().includes('katashi');
+        if (!isCreator) {
+            return await message.reply("Chỉ có Creator (Katashi) mới có quyền reset điểm hảo cảm nha!");
+        }
+
+        const mentionedUser = message.mentions.users.first();
+        const args = content.split(/ +/).slice(1);
+        const targetId = mentionedUser ? mentionedUser.id : (args[0] ? args[0].replace(/[^0-9]/g, '') : null);
+
+        if (!targetId) {
+            return await message.reply("Cú pháp: `.resetscore <ID_hoặc_tag_User>`");
+        }
+
+        const res = memoryProvider.resetAffection(targetId);
+        return await message.reply(`🔄 Đã reset điểm hảo cảm cho User ID \`${targetId}\` về mốc ${res.profile.affectionScore} EXP (${res.profile.relationshipLevel}).`);
+    }
+
+    // --- CÁC LỆNH VOICE (DÙNG ĐIỀU KIỆN ENABLE_VOICE) ---
+    if (firstWord === '.join' || firstWord === '.listen' || firstWord === '.out' || firstWord === '.leave') {
+        if (process.env.ENABLE_VOICE !== 'true') {
+            return await message.reply("⚠️ Tính năng Voice tạm thời đang TẮT trên máy chủ này để tiết kiệm tài nguyên!");
+        }
+        try {
+            if (firstWord === '.join') {
+                const { handleJoinCommand } = await import('./src/commands/join.js');
+                return await handleJoinCommand(message);
+            }
+            if (firstWord === '.listen') {
+                const { handleListenCommand } = await import('./src/commands/listen.js');
+                return await handleListenCommand(message);
+            }
+            if (firstWord === '.out' || firstWord === '.leave') {
+                const { handleLeaveCommand } = await import('./src/commands/leave.js');
+                return await handleLeaveCommand(message);
+            }
+        } catch (vErr) {
+            console.error("❌ Lỗi gọi lệnh Voice:", vErr.message);
+            return await message.reply("Thư viện Voice chưa được cài đặt trên server.");
+        }
+    }
 
     // --- 2. CÁC LỆNH OSU! MULTIPLAYER & ROOM ---
     if (firstWord === '.mr' || firstWord === '.make-room' || firstWord === '.makeroom' || firstWord === '.lobby') {
+        const { handleMakeRoomCommand } = await import('./src/commands/osu/makeRoomCommand.js');
         return await handleMakeRoomCommand(message);
     }
     if (firstWord === '.inv' || firstWord === '.invite' || firstWord === '.invosu') {
+        const { handleInviteCommand } = await import('./src/commands/osu/inviteCommand.js');
         return await handleInviteCommand(message);
     }
     if (firstWord === '.close' || firstWord === '.matchclose' || firstWord === '.mc') {
+        const { handleCloseMatchCommand } = await import('./src/commands/osu/closeMatchCommand.js');
         return await handleCloseMatchCommand(message);
     }
     if (firstWord === '.joinroom' || firstWord === '!joinroom') {
+        const { handleJoinRoomCommand } = await import('./src/commands/osu/joinRoomCommand.js');
         return await handleJoinRoomCommand(message);
     }
 
@@ -167,12 +251,16 @@ client.on('messageCreate', async (message) => {
     // ⚡ 4. XỬ LÝ CHAT TEXT TỰ ĐỘNG BẰNG AI AGENT (BRAIN INTEGRATION)
     // ==========================================================
     const isMentioned = message.mentions.has(client.user);
-    const isSpecialChannel = message.channel.name === 'con-vợ-ai';
+    const configuredChannel = (process.env.SPECIAL_CHANNEL_NAME || 'con-vợ-ai').trim();
+    const isSpecialChannel = message.channel.name === configuredChannel || message.channel.name.startsWith(configuredChannel);
 
-    // ⛔ 🛡️ BẢO VỆ DUNG LƯỢNG BỘ NHỚ KÊNH:
-    // CHỈ XỬ LÝ KHI: Được tag tên (@yue) HOẶC là kênh chat riêng "con-vợ-ai".
-    // Mọi kênh chat thường khác nếu người dùng không đề cập @yue -> BỎ QUA NGAY LẬP TỨC (Không ghi file rác!).
     if (!isMentioned && !isSpecialChannel) {
+        return;
+    }
+
+    // ⛔ CHẶN USER BỊ BLACKLIST (HẢO CẢM <= 0 HOẶC BỊ CẤM)
+    if (memoryProvider.isBlacklisted(message.author.id)) {
+        console.log(`⛔ [Yue AI] Bỏ qua tin nhắn từ User bị Blacklist (Hảo cảm <= 0): ${message.author.username} (${message.author.id})`);
         return;
     }
 
@@ -185,7 +273,7 @@ client.on('messageCreate', async (message) => {
     const mediaData = await extractMediaFromMessage(message);
     const isImage = Boolean(mediaData);
 
-    // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL (Chỉ lưu trong kênh con-vợ-ai hoặc khi có tag Yue)
+    // 💾 LƯU TIN NHẮN CỦA USER VÀO BỘ ĐỆM LỊCH SỬ KÊNH LOCAL
     saveMessageToLocalHistory(message.channel.id, {
         authorId: message.author.id,
         authorName: message.member?.displayName || message.author.username,
@@ -195,7 +283,7 @@ client.on('messageCreate', async (message) => {
         timestamp: message.createdTimestamp
     });
 
-    // 2. Xử lý Reply Reference (Trả lời tin nhắn người dùng khác)
+    // 2. Xử lý Reply Reference
     let repliedContextText = "";
     let isReplyToOtherUserWithoutMention = false;
 
@@ -205,10 +293,8 @@ client.on('messageCreate', async (message) => {
             const isReplyingToYue = repliedMessage.author.id === client.user.id;
 
             if (!isReplyingToYue && !isMentioned) {
-                // Người dùng rep tin nhắn của người khác và KHÔNG tag Yue -> Đã lưu history ở trên, dừng không trả lời AI
                 isReplyToOtherUserWithoutMention = true;
             } else if (!isReplyingToYue && isMentioned) {
-                // Người dùng rep tin nhắn của người khác VÀ CÓ tag @yue -> Trích xuất tin nhắn của người được rep làm ngữ cảnh
                 const targetAuthorName = repliedMessage.member?.displayName || repliedMessage.author.username;
                 const cleanRepliedContent = (repliedMessage.content || '').replace(/\r?\n/g, ' ').slice(0, 100);
                 repliedContextText = `[ĐANG REP TIN NHẮN CỦA ${targetAuthorName}: "${cleanRepliedContent}"]\n`;
@@ -224,13 +310,26 @@ client.on('messageCreate', async (message) => {
 
     if (isMentioned || isSpecialChannel) {
         try {
+            // 🛡️ BƯỚC 0: KIỂM TRA ANTI-SPAM TỪ NGƯỜI DÙNG
+            const spamCheck = checkAntiSpam(
+                message.author.id,
+                message.member?.displayName || message.author.username,
+                userPrompt || message.content
+            );
+
+            if (spamCheck.isSpam) {
+                if (spamCheck.replyMessage) {
+                    await message.reply(spamCheck.replyMessage);
+                }
+                return;
+            }
+
             await message.channel.sendTyping();
 
             if (!userPrompt && !isImage) {
                 return message.reply("Ơ kìa tag tui mà không nói gì à? 🙄");
             }
 
-            // Gắn ngữ cảnh rep tin nhắn (nếu có) vào prompt người dùng
             const fullUserPromptWithReply = `${repliedContextText}${userPrompt}`.trim();
 
             // 🧠 BƯỚC 1: DỰNG CONTEXT (4 LAYERS & RUNTIME PROFILE)
@@ -275,7 +374,8 @@ client.on('messageCreate', async (message) => {
             // 💾 LƯU PHẢN HỒI CỦA YUE VÀO BỘ ĐỆM LỊCH SỬ LOCAL
             saveYueReplyToLocalHistory(message.channel.id, aiResponse);
 
-            await message.reply(aiResponse);
+            const replySuffix = process.env.BOT_REPLY_SUFFIX ? ` ${process.env.BOT_REPLY_SUFFIX.trim()}` : '';
+            await message.reply(`${aiResponse}${replySuffix}`);
 
         } catch (error) {
             console.error("❌ Lỗi xử lý AI ở index:", error);
@@ -287,16 +387,24 @@ client.on('messageCreate', async (message) => {
 // ==========================================================
 // ⚡ 4. XỬ LÝ SỰ KIỆN NGUỜI DÙNG RA/VÀO PHÒNG VOICE (AUTO LEAVE 5 PHÚT)
 // ==========================================================
-client.on('voiceStateUpdate', (oldState, newState) => {
-    const guild = oldState.guild || newState.guild;
-    if (!guild) return;
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    if (process.env.ENABLE_VOICE !== 'true') return;
+    try {
+        const { getVoiceConnection } = await import('@discordjs/voice');
+        const { checkVoiceChannelState } = await import('./src/services/voiceAutoLeaveService.js');
 
-    const connection = getVoiceConnection(guild.id);
-    if (!connection) return;
+        const guild = oldState.guild || newState.guild;
+        if (!guild) return;
 
-    const botChannelId = connection.joinConfig.channelId;
-    if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
-        checkVoiceChannelState(guild, botChannelId);
+        const connection = getVoiceConnection(guild.id);
+        if (!connection) return;
+
+        const botChannelId = connection.joinConfig.channelId;
+        if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
+            checkVoiceChannelState(guild, botChannelId);
+        }
+    } catch (vErr) {
+        // Voice module not available, ignore silently
     }
 });
 

@@ -305,6 +305,96 @@ export class MemoryProvider {
         return db[discordId];
     }
 
+    isBlacklisted(discordId) {
+        if (!discordId) return false;
+        if (String(discordId) === '756427625970270248') return false;
+        const user = this.getUser(discordId);
+        const score = typeof user.profile?.affectionScore === 'number' ? user.profile.affectionScore : 1000;
+        return Boolean(user.profile?.isBlacklisted || score <= 0);
+    }
+
+    blacklistUser(discordId) {
+        if (!discordId) return null;
+        if (String(discordId) === '756427625970270248') return null;
+
+        const db = this._read();
+        const user = this.getUser(discordId);
+
+        const currentScore = typeof user.profile?.affectionScore === 'number' ? user.profile.affectionScore : 1000;
+        if (currentScore > 0) {
+            user.profile.scoreBeforeBlock = currentScore;
+        }
+
+        user.profile.affectionScore = 0;
+        user.profile.isBlacklisted = true;
+        user.profile.relationshipLevel = 'Bị Cấm / Blacklisted';
+
+        db[discordId] = user;
+        this._write(db);
+        return user;
+    }
+
+    unblacklistUser(discordId, customScore = null) {
+        if (!discordId) return null;
+        const db = this._read();
+        const user = this.getUser(discordId);
+
+        let restoredScore = 1000;
+        if (customScore !== null && customScore !== undefined) {
+            restoredScore = customScore;
+        } else if (typeof user.profile.scoreBeforeBlock === 'number' && user.profile.scoreBeforeBlock > 0) {
+            restoredScore = user.profile.scoreBeforeBlock;
+        }
+
+        user.profile.affectionScore = restoredScore;
+        user.profile.isBlacklisted = false;
+        delete user.profile.scoreBeforeBlock;
+
+        const tier = this.getAffectionTier(restoredScore);
+        user.profile.relationshipLevel = tier.level;
+
+        db[discordId] = user;
+        this._write(db);
+        return user;
+    }
+
+    resetAffection(discordId) {
+        const db = this._read();
+        const user = this.getUser(discordId);
+
+        const isCreator = String(discordId) === '756427625970270248';
+        const resetScore = isCreator ? 100000 : 1000;
+
+        user.profile.affectionScore = resetScore;
+        user.profile.isBlacklisted = false;
+        delete user.profile.scoreBeforeBlock;
+
+        const tier = this.getAffectionTier(resetScore);
+        user.profile.relationshipLevel = tier.level;
+
+        db[discordId] = user;
+        this._write(db);
+        return user;
+    }
+
+    getBlacklistedUsers() {
+        const db = this._read();
+        const list = [];
+        for (const [id, data] of Object.entries(db)) {
+            if (id === '756427625970270248') continue;
+            const score = typeof data.profile?.affectionScore === 'number' ? data.profile.affectionScore : 1000;
+            if (data.profile?.isBlacklisted || score <= 0) {
+                list.push({
+                    discordId: id,
+                    score: score,
+                    level: data.profile?.relationshipLevel || 'Bị Cấm',
+                    lastKnownName: Object.values(data.guilds || {})[0]?.lastKnownDisplayName || 'User ' + id
+                });
+            }
+        }
+        return list;
+    }
+
     getAffection(discordId) {
         const user = this.getUser(discordId);
         if (String(discordId) === '756427625970270248') {
@@ -315,7 +405,9 @@ export class MemoryProvider {
     }
 
     getAffectionTier(score) {
-        if (score >= 50000) {
+        if (score <= 0) {
+            return { score, level: 'Bị Cấm / Blacklisted', description: 'User đã bị đưa vào Danh sách đen (Blacklist). Hệ thống tự động xem là vô hình và không phản hồi.' };
+        } else if (score >= 50000) {
             return { score, level: 'Tri Kỷ / Siêu Thân Thiết', description: 'Cạ cứng ruột, cực kỳ tin tưởng, hết mình trợ giúp, trêu yêu ngọt ngào' };
         } else if (score >= 25000) {
             return { score, level: 'Bạn Thân Cao Cấp', description: 'Rất thân thiết, chia sẻ tâm sự, rủ rê chơi game cực kỳ thoải mái' };
@@ -347,6 +439,13 @@ export class MemoryProvider {
         user.profile.affectionScore = newScore;
         const tier = this.getAffectionTier(newScore);
         user.profile.relationshipLevel = tier.level;
+
+        if (newScore <= 0 && !isCreator) {
+            if (currentScore > 0 && (!user.profile.scoreBeforeBlock || user.profile.scoreBeforeBlock <= 0)) {
+                user.profile.scoreBeforeBlock = currentScore;
+            }
+            user.profile.isBlacklisted = true;
+        }
 
         db[discordId] = user;
         this._write(db);

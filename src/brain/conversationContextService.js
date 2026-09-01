@@ -44,8 +44,9 @@ export function filterCleanHistory(rawMessages, botUserId, maxTurns = 40) {
         if (isBot) {
             let cleanText = content;
             try {
-                const parsed = JSON.parse(content);
-                cleanText = parsed.reply || content;
+                let parsed = JSON.parse(content);
+                if (Array.isArray(parsed)) parsed = parsed[0];
+                cleanText = parsed?.reply || content;
             } catch {
                 cleanText = content.replace(/```json/gi, '').replace(/```/g, '').trim();
             }
