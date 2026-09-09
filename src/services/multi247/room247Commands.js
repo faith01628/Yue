@@ -5,6 +5,7 @@ import { checkCommunitySafety } from './communitySafetyGuard.js';
 import { askYue } from '../aiService.js';
 import { isUserRef } from '../../commands/osuInGame/refCommands.js';
 import { executeRoutedCommand } from '../osu/banchoService.js';
+import { handleMatchEvaluationCommand } from '../osu/matchEvaluatorService.js';
 
 function isCurrentHost(channel, username) {
     try {
@@ -135,7 +136,41 @@ export async function handle247RoomCommands(channel, message, commandString, sen
             return await channel.sendMessage(t('yuePrompt', roomLang, senderUsername));
         }
 
+        // 🎯 TỰ ĐỘNG PHÁT HIỆN YÊU CẦU ĐÁNH GIÁ TRẬN ĐẤU / PHONG ĐỘ / RS / STAT (TỰ ĐỘNG ÂM THẦM CHECK RS & STAT)
+        const lowerPrompt = userPrompt.toLowerCase().trim();
+        
+        // 1. Nếu từ đầu tiên là lệnh trực tiếp (.match, .danhgia, .review)
+        const firstWord = lowerPrompt.split(/ +/)[0];
+        const isDirectMatchCmd = ['.match', '!match', '.danhgia', '!danhgia', '.review', '!review', 'match', 'danhgia', 'review', 'eval', 'evaluate'].includes(firstWord);
+
+        // 2. Hoặc chứa các cụm từ yêu cầu đánh giá trận đấu/điểm số/phong độ/rs/stat rõ ràng
+        const evalKeywords = [
+            'đánh giá', 'danh gia', 'dánh giá',
+            'phán xét', 'phan xet',
+            'nhận xét', 'nhan xet',
+            'kiểm tra rs', 'kiem tra rs', 'check rs', 'xem rs', 'soi rs', 'rs play',
+            'kiểm tra stat', 'kiem tra stat', 'check stat', 'xem stat', 'soi stat', 'stat trung bình',
+            'phong độ', 'phong do',
+            'trận vừa', 'tran vua', 'map vừa', 'map vua', 'bài vừa', 'bai vua',
+            'xem lại trận', 'ket qua tran', 'kết quả trận',
+            'điểm số', 'diem so', 'bảng điểm', 'bang diem',
+            'chơi sao', 'choi sao', 'đánh sao', 'danh sao', 'play sao',
+            'chơi thế nào', 'choi the nao', 'đánh thế nào', 'danh the nao',
+            'màn thể hiện', 'man the hien',
+            'thấy điểm', 'điểm tôi', 'điểm tui', 'thấy trận', 'thấy map', 'thấy sao'
+        ];
+
+        const isExplicitPhrase = evalKeywords.some(keyword => lowerPrompt.includes(keyword));
+        const isMatchQuery = isDirectMatchCmd || isExplicitPhrase;
+
+        if (isMatchQuery) {
+            return await handleMatchEvaluationCommand(channel, senderUsername, userPrompt);
+        }
+
+
+
         try {
+
             // Phân tích chiến lược ngôn ngữ thông minh
             const langStrategy = await determineLanguageStrategy(senderUsername, userPrompt);
             const playerMem = getPlayer247Memory(senderUsername);
@@ -167,8 +202,14 @@ export async function handle247RoomCommands(channel, message, commandString, sen
             if (aiData.command && typeof aiData.command === 'string' && aiData.command.trim()) {
                 const aiCmd = aiData.command.trim();
                 console.log(`[AI Command Exec] 🤖 Executing command from AI for ${senderUsername} (${senderRole}): ${aiCmd}`);
-                await executeRoutedCommand(channel, message, aiCmd, senderUsername);
+                const lowerCmd = aiCmd.toLowerCase();
+                if (lowerCmd.startsWith('.match') || lowerCmd.startsWith('.danhgia') || lowerCmd.startsWith('.review') || lowerCmd.startsWith('.rs') || lowerCmd.startsWith('.r')) {
+                    await handleMatchEvaluationCommand(channel, senderUsername, aiCmd);
+                } else {
+                    await executeRoutedCommand(channel, message, aiCmd, senderUsername);
+                }
             }
+
 
             // Ghi nhận nếu có note mới
             if (userPrompt.toLowerCase().includes('tôi là') || userPrompt.toLowerCase().includes('i am')) {

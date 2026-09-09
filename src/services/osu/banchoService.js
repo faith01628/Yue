@@ -18,6 +18,7 @@ import {
 import { handle247RoomCommands } from '../multi247/room247Commands.js';
 import { getRoomLanguage, t } from '../multi247/multilingualService.js';
 import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247Room, reset247RoomLobbyDefaults, start247KeepAliveLoop } from '../multi247/room247Manager.js';
+import { recordRoomMatch, handleMatchEvaluationCommand } from './matchEvaluatorService.js';
 
 const { BanchoClient } = banchojs;
 
@@ -353,6 +354,15 @@ async function handleInGameChat(message) {
             if (lowerContent.includes('the match has finished')) {
                 const matchId = channelName.replace('#mp_', '');
                 
+                // 🎯 TỰ ĐỘNG GHI NHỚ TRẬN ĐẤU VỪA HOÀN THÀNH VÀO BỘ NHỚ RAM
+                setTimeout(async () => {
+                    try {
+                        await recordRoomMatch(matchId, channelName);
+                    } catch (mErr) {
+                        console.error('[MatchEvaluator AutoRecord Error]:', mErr.message);
+                    }
+                }, 1500);
+
                 // ⚙️ TỰ ĐỘNG RESET VỀ SETTING CHUẨN + FREEMOD + KHÔNG MẬT KHẨU SAU MỖI TRẬN
                 if (is247CommunityRoom(matchId) || isAutohostOn(channelName)) {
                     await reset247RoomLobbyDefaults(channel);
@@ -388,6 +398,17 @@ async function handleInGameChat(message) {
         }
 
         const firstWord = content.split(/ +/)[0].toLowerCase();
+        
+        // 🎯 Lệnh đánh giá trận đấu trực tiếp
+        if (['.match', '!match', '.danhgia', '!danhgia', '.review', '!review'].includes(firstWord)) {
+            const now = Date.now();
+            const lastUsed = channelCooldowns.get(channelName) || 0;
+            if (now - lastUsed < COOLDOWN_TIME_MS) return;
+            channelCooldowns.set(channelName, now);
+
+            return await handleMatchEvaluationCommand(channel, senderUsername, content);
+        }
+
         const standardCommands = [
             '.sr', '!sr', '.stars', '!stars', '.vote', '!vote', '.roominfo', '!roominfo', '.247', '!247',
             '.host', '!host',
@@ -411,6 +432,7 @@ async function handleInGameChat(message) {
 
             return await handle247RoomCommands(channel, message, content, senderUsername);
         }
+
     } catch (globalErr) {
         console.error('💥 Lỗi toàn cục handleInGameChat:', globalErr.message);
     }

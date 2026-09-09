@@ -373,3 +373,33 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         return null;
     }
 }
+
+/**
+ * 8. Lấy thông tin Match Multiplayer từ osu! API v2
+ */
+export async function getMatchDetails(matchId) {
+    if (!matchId) return null;
+    const numId = Number(matchId);
+    try {
+        const matchData = await fetchOsuAPI(`/matches/${numId}`);
+        return matchData;
+    } catch (error) {
+        console.error(`❌ Lỗi lấy Match Details cho ID ${matchId}:`, error.response?.data || error.message);
+        
+        // Fallback thử với osu! API v1 nếu v2 lỗi
+        try {
+            const apiKey = process.env.OSU_API_KEY;
+            if (apiKey) {
+                const res = await axios.get(`https://osu.ppy.sh/api/get_match`, {
+                    params: { k: apiKey, mp: numId }
+                });
+                if (res.data && res.data.match) {
+                    return res.data;
+                }
+            }
+        } catch (v1Err) {
+            console.error(`❌ Fallback API v1 get_match cũng thất bại cho ID ${matchId}:`, v1Err.message);
+        }
+        return null;
+    }
+}

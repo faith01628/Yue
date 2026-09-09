@@ -86,8 +86,10 @@ const defaultFullConfig = {
             hostCommands: true,              // Lệnh IRC cho Host (!start, !mp, !autohost, !next...)
             mapCommands: true,               // Lệnh chọn/search map (!r, !map, !fm...)
             playerCommands: true,            // Lệnh người chơi (!roll, !stat, !help...)
+            matchEvaluator: true,            // Đánh giá phong độ trận đấu (.match, .danhgia, .yue bạn thấy trận vừa rồi thế nào)
             refCommands: true                // Lệnh trọng tài 24/7 (!kick, !ban, !lock...)
         }
+
     }
 };
 
