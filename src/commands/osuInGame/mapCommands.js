@@ -1,4 +1,6 @@
 import { isUserRef } from './refCommands.js';
+import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
+import { calculateBeatmapPP } from '../../services/osu/osuService.js';
 
 export const currentRoomMapId = new Map();
 const lobbyRequests = new Map();
@@ -176,21 +178,156 @@ export function setRoomCurrentMap(channelName, mapId) {
     currentRoomMapId.set(channelName, mapId);
 }
 
+function calculateEstimatedPP(stars, od = 8, maxCombo = 1000) {
+    const starNum = parseFloat(stars) || 0;
+    const odNum = parseFloat(od) || 8;
+    const comboNum = parseInt(maxCombo) || 1000;
+
+    let basePP = 0;
+    if (starNum <= 5.0) {
+        basePP = Math.pow(starNum, 3.25) * 0.68;
+    } else {
+        basePP = Math.pow(5.0, 3.25) * 0.68 + Math.pow(starNum - 5.0, 2.4) * 88;
+    }
+
+    const odBonus = 1 + (odNum - 8) * 0.04;
+    const comboBonus = Math.min(1.25, Math.max(0.80, Math.pow(comboNum / 1000, 0.2)));
+
+    const estimatedSS = Math.round(basePP * odBonus * comboBonus);
+    const acc95Factor = Math.max(0.65, 0.91 - odNum * 0.015);
+    const estimated95 = Math.round(estimatedSS * acc95Factor);
+
+    return { estimatedSS, estimated95 };
+}
+
+const lastSentMapCache = new Map();
+
+/**
+ * 🎯 TỰ ĐỘNG GỬI THÔNG TIN MAP VÀ LINK TẢI NHANH (YUE MAP + YUE DL)
+ */
+export async function sendBeatmapInfoAndDL(channel, beatmapId, options = {}) {
+    if (!channel || !beatmapId) return false;
+    const channelName = typeof channel === 'string' ? channel : (channel.name || 'default');
+    const force = options.force || false;
+
+    const now = Date.now();
+    const cached = lastSentMapCache.get(channelName);
+
+    if (!force && cached && cached.beatmapId === String(beatmapId)) {
+        console.log(`[sendBeatmapInfoAndDL] ℹ️ Map ID ${beatmapId} trùng với map hiện tại của ${channelName}, bỏ qua.`);
+        return false;
+    }
+
+    lastSentMapCache.set(channelName, { beatmapId: String(beatmapId), time: now });
+
+    try {
+        const apiKey = process.env.OSU_API_KEY;
+        let bm = null;
+
+        if (apiKey) {
+            const bmRes = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${beatmapId}`);
+            const bmData = await bmRes.json();
+            if (bmData && bmData.length > 0) bm = bmData[0];
+        }
+
+        if (!bm) {
+            const resRosu = await fetch(`https://catboy.best/api/v2/b/${beatmapId}`);
+            const dataRosu = await resRosu.json();
+            if (dataRosu && (dataRosu.id || dataRosu.beatmapset_id)) {
+                bm = {
+                    beatmapset_id: dataRosu.beatmapset_id || dataRosu.beatmapset?.id || dataRosu.setId,
+                    title: dataRosu.title || dataRosu.beatmapset?.title || 'Beatmap',
+                    version: dataRosu.version || '',
+                    difficultyrating: dataRosu.difficulty_rating || dataRosu.stars || 0,
+                    diff_overall: dataRosu.accuracy || dataRosu.od || 8,
+                    diff_approach: dataRosu.ar || 9,
+                    diff_drain: dataRosu.hp || 6,
+                    diff_size: dataRosu.cs || 4,
+                    max_combo: dataRosu.max_combo || 0
+                };
+            }
+        }
+
+        if (bm) {
+            const setId = bm.beatmapset_id;
+            const shortTitle = formatShortTitle(bm.title, 20);
+            const diffName = bm.version ? `[${bm.version}]` : '';
+            let stars = parseFloat(bm.difficultyrating || 0).toFixed(2);
+            let combo = bm.max_combo ? `${bm.max_combo}x` : '?x';
+
+            const ar = parseFloat(bm.diff_approach || 0).toFixed(1);
+            const od = parseFloat(bm.diff_overall || 0).toFixed(1);
+            const hp = parseFloat(bm.diff_drain || 0).toFixed(1);
+            const cs = parseFloat(bm.diff_size || 0).toFixed(1);
+
+            // 🎯 Tính PP chuẩn bằng rosu-pp-js (chính xác 100% như Discord bot Bathbot / o!sb)
+            let estimatedSS = '?';
+            let estimated99 = '?';
+            let estimated95 = '?';
+
+            try {
+                const [ssRes, p99Res, p95Res] = await Promise.all([
+                    calculateBeatmapPP(beatmapId, { accuracy: 100 }),
+                    calculateBeatmapPP(beatmapId, { accuracy: 99 }),
+                    calculateBeatmapPP(beatmapId, { accuracy: 95 })
+                ]);
+
+                if (ssRes && ssRes.pp !== undefined) {
+                    estimatedSS = Math.round(ssRes.pp);
+                    if (ssRes.difficulty?.stars) {
+                        stars = ssRes.difficulty.stars.toFixed(2);
+                    }
+                    if (ssRes.difficulty?.maxCombo) {
+                        combo = `${ssRes.difficulty.maxCombo}x`;
+                    }
+                }
+                if (p99Res && p99Res.pp !== undefined) {
+                    estimated99 = Math.round(p99Res.pp);
+                }
+                if (p95Res && p95Res.pp !== undefined) {
+                    estimated95 = Math.round(p95Res.pp);
+                }
+            } catch (calcErr) {
+                console.error('[sendBeatmapInfoAndDL PP error]:', calcErr.message);
+                const est = calculateEstimatedPP(stars, od, bm.max_combo);
+                estimatedSS = est.estimatedSS;
+                estimated95 = est.estimated95;
+            }
+
+            const dlLinks = buildDownloadLinks(setId, beatmapId);
+            const mapTitleLink = `[https://osu.ppy.sh/b/${beatmapId} ${shortTitle} ${diffName}]`;
+
+            const ppStr = estimated99 !== '?'
+                ? `SS: ${estimatedSS}pp | 99%: ${estimated99}pp | 95%: ${estimated95}pp`
+                : `SS: ${estimatedSS}pp | 95%: ${estimated95}pp`;
+
+            const infoLine = `YUE MAP: ${mapTitleLink} (${stars}★) | ${ppStr} | AR${ar} OD${od} HP${hp} CS${cs} | Combo: ${combo}`;
+            const linkLine = `YUE DL: ${dlLinks}`;
+
+            await channel.sendMessage(infoLine);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await channel.sendMessage(linkLine);
+            return true;
+        }
+    } catch (e) {
+        console.error('[sendBeatmapInfoAndDL Error]:', e.message);
+    }
+    return false;
+}
+
 async function applyMapToRoom(channel, map) {
     const channelName = channel.name;
+    const currentMap = currentRoomMapId.get(channelName);
+
+    if (currentMap === String(map.beatmap_id)) {
+        return await channel.sendMessage(`YUE: Map (${map.beatmap_id}) is already the active map in room!`);
+    }
+
     setRoomCurrentMap(channelName, map.beatmap_id);
 
     await channel.sendMessage(`!mp map ${map.beatmap_id}`);
-    
-    const shortTitle = formatShortTitle(map.title, 25);
-    const diffName = map.version ? ` [${map.version}]` : '';
-    const mapWebUrl = `https://osu.ppy.sh/b/${map.beatmap_id}`;
-    
-    const mapTextWithLink = `[${mapWebUrl} ${shortTitle}${diffName}]`;
-
-    return await channel.sendMessage(
-        `YUE: Đã chọn map! ${mapTextWithLink} (${map.stars.toFixed(2)}★) | Gõ .map để xem thông tin & link tải!`
-    );
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await sendBeatmapInfoAndDL(channel, map.beatmap_id);
 }
 
 export async function handleMapCommands(channel, message, args, command) {
@@ -198,15 +335,23 @@ export async function handleMapCommands(channel, message, args, command) {
     const sender = message.user?.username || 'Player';
     const lowerCmd = command ? command.toLowerCase() : '';
 
+    const roomLang = await getRoomLanguage(channel);
+
     if (lowerCmd === '.abort' || lowerCmd === '!abort') {
+        if (!isCurrentHost(channel, sender) && !isUserRef(channelName, sender)) {
+            return await channel.sendMessage(t('hostNoPerm', roomLang));
+        }
         await channel.sendMessage(`!mp abort`);
-        return await channel.sendMessage(`YUE: Đã hủy trận đấu!`);
+        return await channel.sendMessage('YUE: Aborted the match!');
     }
 
     if (lowerCmd === '.time' || lowerCmd === '!time' || lowerCmd === '.timer') {
+        if (!isCurrentHost(channel, sender) && !isUserRef(channelName, sender)) {
+            return await channel.sendMessage(t('hostNoPerm', roomLang));
+        }
         const seconds = parseInt(args[0]) || 30;
         await channel.sendMessage(`!mp timer ${seconds}`);
-        return await channel.sendMessage(`YUE: Đã bật đếm ngược ${seconds} giây!`);
+        return await channel.sendMessage(`YUE: Started ${seconds}s countdown!`);
     }
 
     // 🎯 LỆNH .MAP VÀ .DL
@@ -220,83 +365,23 @@ export async function handleMapCommands(channel, message, args, command) {
         }
 
         if (!mapId) {
-            console.log(`[MapCmd Debug] Room ${channelName} chưa ghi nhận được Map ID nào.`);
-            return await channel.sendMessage(`YUE: Chưa ghi nhận map nào trong phòng! Vui lòng pick/đổi map trước.`);
+            console.log(`[MapCmd Debug] Room ${channelName} no Map ID recorded.`);
+            return await channel.sendMessage(`YUE: No map recorded in room yet! Please pick/change a map first.`);
         }
 
-        try {
-            const apiKey = process.env.OSU_API_KEY;
-            let bm = null;
-
-            if (apiKey) {
-                const bmRes = await fetch(`https://osu.ppy.sh/api/get_beatmaps?k=${apiKey}&b=${mapId}`);
-                const bmData = await bmRes.json();
-                if (bmData && bmData.length > 0) bm = bmData[0];
-            }
-
-            if (!bm) {
-                const resRosu = await fetch(`https://catboy.best/api/v2/b/${mapId}`);
-                const dataRosu = await resRosu.json();
-                if (dataRosu && (dataRosu.id || dataRosu.beatmapset_id)) {
-                    bm = {
-                        beatmapset_id: dataRosu.beatmapset_id || dataRosu.beatmapset?.id || dataRosu.setId,
-                        title: dataRosu.title || dataRosu.beatmapset?.title || 'Beatmap',
-                        version: dataRosu.version || '',
-                        difficultyrating: dataRosu.difficulty_rating || dataRosu.stars || 0,
-                        diff_overall: dataRosu.accuracy || dataRosu.od || 8,
-                        diff_approach: dataRosu.ar || 9,
-                        diff_drain: dataRosu.hp || 6,
-                        diff_size: dataRosu.cs || 4,
-                        max_combo: dataRosu.max_combo || 0
-                    };
-                }
-            }
-
-            if (bm) {
-                const setId = bm.beatmapset_id;
-                const shortTitle = formatShortTitle(bm.title, 20);
-                const diffName = bm.version ? `[${bm.version}]` : '';
-                const stars = parseFloat(bm.difficultyrating || 0).toFixed(2);
-                const combo = bm.max_combo ? `${bm.max_combo}x` : '?x';
-
-                const ar = parseFloat(bm.diff_approach || 0).toFixed(1);
-                const od = parseFloat(bm.diff_overall || 0).toFixed(1);
-                const hp = parseFloat(bm.diff_drain || 0).toFixed(1);
-                const cs = parseFloat(bm.diff_size || 0).toFixed(1);
-
-                const baseStar = parseFloat(stars);
-                const estimatedSS = Math.round(Math.pow(baseStar, 3) * 2.8);
-                const estimated95 = Math.round(estimatedSS * 0.78);
-
-                const dlLinks = buildDownloadLinks(setId, mapId);
-
-                if (['.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link'].includes(lowerCmd)) {
-                    return await channel.sendMessage(`YUE DL: ${dlLinks}`);
-                }
-
-                const infoLine = `YUE MAP: ${shortTitle} ${diffName} (${stars}★) | SS: ${estimatedSS}pp | 95%: ${estimated95}pp | AR${ar} OD${od} HP${hp} CS${cs} | Combo: ${combo}`;
-                const linkLine = `YUE DL: ${dlLinks}`;
-
-                await channel.sendMessage(infoLine);
-                await new Promise(resolve => setTimeout(resolve, 300));
-                return await channel.sendMessage(linkLine);
-            }
-        } catch (e) {
-            console.error('Lỗi lấy thông tin lệnh .map/.dl:', e.message);
-        }
-        return await channel.sendMessage(`YUE: Không lấy được thông tin/link tải cho map #${mapId}!`);
+        return await sendBeatmapInfoAndDL(channel, mapId, { force: true });
     }
 
     if (['.rnd', '!rnd', '.random', '!random'].includes(lowerCmd)) {
         const options = parseRandomArgs(args);
-        const starInfo = options.stars ? `~${options.stars}★` : 'ngẫu nhiên★';
+        const starInfo = options.stars ? `~${options.stars}★` : 'random★';
         
-        await channel.sendMessage(`YUE: Đang tìm map (${starInfo}, max ${Math.round(options.maxDuration / 60)}m)...`);
+        await channel.sendMessage(`YUE: Searching for map (${starInfo}, max ${Math.round(options.maxDuration / 60)}m)...`);
 
         const map = await fetchRandomBeatmap(options);
 
         if (!map) {
-            return await channel.sendMessage(`YUE: Không tìm thấy map phù hợp tiêu chí! Thử nới rộng độ sao xem sao.`);
+            return await channel.sendMessage(`YUE: No matching map found! Try widening the star range.`);
         }
 
         if (isCurrentHost(channel, sender)) {
@@ -308,19 +393,19 @@ export async function handleMapCommands(channel, message, args, command) {
         const diffName = map.version ? ` [${map.version}]` : '';
 
         return await channel.sendMessage(
-            `YUE: [Đề xuất #${reqIndex}] ${sender} vừa gợi ý map: ${shortTitle}${diffName} (${map.stars.toFixed(2)}★). Host gõ ".a ${sender}" để chọn map này!`
+            `YUE: [Request #${reqIndex}] ${sender} suggested map: ${shortTitle}${diffName} (${map.stars.toFixed(2)}★). Host type ".a ${sender}" to pick it!`
         );
     }
 
     if (['.a', '!a', '.accept', '!accept'].includes(lowerCmd)) {
         if (!isCurrentHost(channel, sender) && !isUserRef(channelName, sender)) {
-            return await channel.sendMessage(`YUE: Chỉ Host hoặc Ref mới có quyền duyệt map (.a)!`);
+            return await channel.sendMessage(`YUE: Only Host or Ref can accept map requests (.a)!`);
         }
 
         const userMapRequests = getRequestsMap(channelName);
 
         if (userMapRequests.size === 0) {
-            return await channel.sendMessage(`YUE: Hiện tại chưa có người chơi nào đề xuất map!`);
+            return await channel.sendMessage(`YUE: No map requests suggested by players yet!`);
         }
 
         let targetUser = args[0]?.trim().toLowerCase();
@@ -328,7 +413,7 @@ export async function handleMapCommands(channel, message, args, command) {
 
         if (!targetUser) {
             const lastEntry = Array.from(userMapRequests.entries()).pop();
-            if (!lastEntry) return await channel.sendMessage(`YUE: Hàng đợi đề xuất trống!`);
+            if (!lastEntry) return await channel.sendMessage(`YUE: Request queue is empty!`);
 
             const [pName, pList] = lastEntry;
             const chosenMap = pList[pList.length - 1];
@@ -338,7 +423,7 @@ export async function handleMapCommands(channel, message, args, command) {
         const playerList = userMapRequests.get(targetUser);
 
         if (!playerList || playerList.length === 0) {
-            return await channel.sendMessage(`YUE: Không tìm thấy đề xuất map nào từ người chơi "${args[0]}"!`);
+            return await channel.sendMessage(`YUE: No map requests found from player "${args[0]}"!`);
         }
 
         let mapToPick = playerList[playerList.length - 1];

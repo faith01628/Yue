@@ -1,17 +1,23 @@
 import banchojs from 'bancho.js';
 import { askYue } from '../aiService.js';
+import { botConfig } from '../../config/botConfig.js';
 
 import { handlePlayerCommands } from '../../commands/osuInGame/playerCommands.js';
 import { handleInGameHelp } from '../../commands/osuInGame/helpCommand.js';
-import { handleMapCommands, setRoomCurrentMap, currentRoomMapId } from '../../commands/osuInGame/mapCommands.js';
+import { handleMapCommands, setRoomCurrentMap, currentRoomMapId, sendBeatmapInfoAndDL } from '../../commands/osuInGame/mapCommands.js';
 import { handleRefCommands, isUserRef } from '../../commands/osuInGame/refCommands.js';
 import {
     handleHostCommands,
+    handlePlayerJoin,
     addPlayerToQueue,
     removePlayerFromQueue,
     rotateToNextHost,
-    isAutohostOn
+    isAutohostOn,
+    enableAutohostForChannel
 } from '../../commands/osuInGame/hostCommands.js';
+import { handle247RoomCommands } from '../multi247/room247Commands.js';
+import { getRoomLanguage, t } from '../multi247/multilingualService.js';
+import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247Room, reset247RoomLobbyDefaults, start247KeepAliveLoop } from '../multi247/room247Manager.js';
 
 const { BanchoClient } = banchojs;
 
@@ -22,6 +28,10 @@ const bancho = new BanchoClient({
 });
 
 let isConnected = false;
+let connectPromise = null;
+let isListenersAttached = false;
+const attachedChannels = new Set();
+
 export const activeLobbies = new Map();
 const channelCooldowns = new Map();
 const COOLDOWN_TIME_MS = 3000;
@@ -65,7 +75,8 @@ async function triggerAutoStart(channel) {
 
 function attachLobbyEvents(channel) {
     const lobby = channel.lobby;
-    if (!lobby) return;
+    if (!lobby || attachedChannels.has(channel.name)) return;
+    attachedChannels.add(channel.name);
 
     lobby.on("beatmap", (beatmap) => {
         try {
@@ -85,7 +96,7 @@ function attachLobbyEvents(channel) {
     lobby.on("playerJoined", (obj) => {
         try {
             const username = obj.player?.user?.username || obj.user?.username;
-            if (username) addPlayerToQueue(channel.name, username);
+            if (username) addPlayerToQueue(channel, username);
         } catch (e) {
             console.error('[PlayerJoined Event Error]:', e.message);
         }
@@ -101,41 +112,108 @@ function attachLobbyEvents(channel) {
     });
 }
 
-export async function forceJoinLobby(matchId) {
-    try {
-        await initBancho();
-        const channelName = `#mp_${matchId}`;
-        const channel = bancho.getChannel(channelName);
+export async function forceJoinLobby(matchId, retries = 3) {
+    const channelName = `#mp_${matchId}`;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            await initBancho();
+            const channel = bancho.getChannel(channelName);
 
-        await channel.join();
-        attachLobbyEvents(channel);
+            await channel.join();
+            attachLobbyEvents(channel);
+            enableAutohostForChannel(channel);
 
-        console.log(`✅ Đã ép Yue rejoin thành công vào ${channelName}`);
-        return true;
-    } catch (err) {
-        console.error(`❌ Lỗi khi force join ${matchId}:`, err);
-        return false;
+            const existingData = activeLobbies.get(matchId) || {};
+            activeLobbies.set(matchId, {
+                ...existingData,
+                matchId: String(matchId),
+                channel: channel,
+                lobby: channel.lobby
+            });
+
+            console.log(`✅ Đã ép Yue rejoin thành công vào ${channelName}`);
+            return true;
+        } catch (err) {
+            console.error(`⚠️ Lỗi khi force join ${channelName} (thử lần ${attempt}/${retries}):`, err.message || err);
+            if (attempt < retries) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            } else {
+                activeLobbies.delete(matchId);
+                const isNoSuchChannel = (err.message || '').toLowerCase().includes('no such channel');
+                if (isNoSuchChannel) {
+                    unregister247Room(matchId);
+                    console.log(`ℹ️ [Bancho IRC] Đã tự động dọn dẹp phòng ${matchId} khỏi DB vì phòng đã thực sự bị xóa trên Bancho.`);
+                } else {
+                    console.log(`⚠️ [Bancho IRC] Giữ lại phòng 24/7 ${matchId} trong DB để tiếp tục tự động rejoin ở chu kỳ sau.`);
+                }
+                return false;
+            }
+        }
     }
+    return false;
 }
 
 export async function initBancho() {
-    if (isConnected) return bancho;
-    try {
-        await bancho.connect();
-        isConnected = true;
-        console.log('✅ Đã kết nối thành công tới osu! Bancho IRC!');
+    const isMultiEnabled = botConfig.osuMultiplayer?.enabled;
+    const isNormalEnabled = botConfig.osuMultiplayer?.normalRooms;
+    const is247Enabled = botConfig.osuMultiplayer?.community247Rooms;
 
-        bancho.on('PM', handleInGameChat);
-        bancho.on('CM', handleInGameChat);
-
-        for (const [matchId] of activeLobbies.entries()) {
-            await forceJoinLobby(matchId);
-        }
-
-    } catch (err) {
-        console.error('❌ Lỗi kết nối Bancho IRC:', err);
+    if (!isMultiEnabled || (!isNormalEnabled && !is247Enabled)) {
+        console.log('⚡ [Master Control Panel] Tính năng Osu Multiplayer & Bancho IRC đang TẮT (Hoặc cả Normal & 247 đều tắt)!');
+        return null;
     }
-    return bancho;
+    if (isConnected) return bancho;
+    if (connectPromise) return connectPromise;
+
+    connectPromise = (async () => {
+        try {
+            await bancho.connect();
+            isConnected = true;
+            console.log('✅ Đã kết nối thành công tới osu! Bancho IRC!');
+
+            if (!isListenersAttached) {
+                isListenersAttached = true;
+                bancho.removeAllListeners('PM');
+                bancho.removeAllListeners('CM');
+                bancho.on('PM', handleInGameChat);
+                bancho.on('CM', handleInGameChat);
+            }
+
+            // Khôi phục phòng 24/7 từ storage CHỈ KHI tính năng community247Rooms được BẬT
+            if (is247Enabled) {
+                console.log('🌐 [Bancho IRC] Đang khôi phục các phòng 24/7 Cộng Đồng...');
+                const stored247Rooms = loadMulti247Rooms();
+                for (const matchId of Object.keys(stored247Rooms)) {
+                    if (!activeLobbies.has(matchId)) {
+                        activeLobbies.set(matchId, {
+                            matchId: String(matchId),
+                            ownerId: stored247Rooms[matchId].ownerDiscordId,
+                            createdAt: stored247Rooms[matchId].createdAt || Date.now()
+                        });
+                    }
+                }
+
+                for (const [matchId] of activeLobbies.entries()) {
+                    await forceJoinLobby(matchId);
+                }
+
+                // 💓 Bật Vòng lặp Keep-Alive giữ phòng 24/7 không bị Bancho tự đóng
+                if (botConfig.osuMultiplayer?.keepAliveHeartbeat) {
+                    start247KeepAliveLoop(bancho);
+                }
+            } else {
+                console.log('ℹ️ [Bancho IRC] Tính năng Phòng 24/7 đang TẮT trên instance này.');
+            }
+
+            return bancho;
+        } catch (err) {
+            connectPromise = null;
+            console.error('❌ Lỗi kết nối Bancho IRC:', err.message || err);
+            return bancho;
+        }
+    })();
+
+    return connectPromise;
 }
 
 async function fetchBeatmapDetail(beatmapId) {
@@ -158,9 +236,9 @@ async function fetchBeatmapDetail(beatmapId) {
 }
 
 /**
- * 🎯 HÀM ĐỊNH TUYẾN THỰC THI LỆNH (ĐÃ FIX BỔ SUNG .MAP VÀ .M)
+ * 🎯 HÀM ĐỊNH TUYẾN THỰC THI LỆNH
  */
-async function executeRoutedCommand(channel, messageObj, commandString, senderUsername) {
+export async function executeRoutedCommand(channel, messageObj, commandString, senderUsername) {
     try {
         const trimmedCmd = commandString.trim();
         const args = trimmedCmd.split(/ +/);
@@ -168,12 +246,41 @@ async function executeRoutedCommand(channel, messageObj, commandString, senderUs
         const commandArgs = args.slice(1);
 
         if (command.startsWith('!mp')) {
-            return await channel.sendMessage(trimmedCmd);
+            if (!isUserRef(channel.name, senderUsername)) {
+                console.log(`[Security Check] ⛔ ${senderUsername} tried running ${trimmedCmd} but is not Ref/Admin.`);
+                return await channel.sendMessage(`YUE: Chỉ Ref/Admin mới có quyền thực thi lệnh Bancho trực tiếp (${command})!`);
+            }
+
+            let finalCmd = trimmedCmd;
+            // Tự động kiểm tra và khớp tên người chơi nguyên bản trong game cho lệnh !mp host <user>
+            if (command === '!mp' && commandArgs[0]?.toLowerCase() === 'host' && commandArgs[1]) {
+                const targetSearch = commandArgs.slice(1).join(' ').trim().toLowerCase();
+                const slots = channel.lobby?.slots || [];
+                const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
+
+                const matchedUser = activePlayers.find(p => {
+                    const pLower = p.toLowerCase();
+                    const pClean = pLower.replace(/\[|\]/g, '');
+                    const targetClean = targetSearch.replace(/\[|\]/g, '');
+                    return pLower === targetSearch || pClean === targetClean || pLower.includes(targetSearch);
+                });
+
+                if (matchedUser) {
+                    finalCmd = `!mp host ${matchedUser}`;
+                }
+            }
+
+            return await channel.sendMessage(finalCmd);
+        }
+        if (['.help', '!help', '.info', '!info'].includes(command)) {
+            return await handleInGameHelp(channel);
+        }
+        if (['.sr', '!sr', '.stars', '!stars', '.vote', '!vote', '.roominfo', '!roominfo', '.247', '!247'].includes(command)) {
+            return await handle247RoomCommands(channel, messageObj, commandString, senderUsername);
         }
         if (['.addref', '!addref', '.rmref', '!rmref', '.refs', '!refs'].includes(command)) {
             return await handleRefCommands(channel, messageObj, commandArgs, command);
         }
-        // 🎯 FIX: Đã bổ sung .map, !map, .m vào danh sách gọi handleMapCommands
         if (['.map', '!map', '.m', '.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random', '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link', '.a', '!a', '.accept', '!accept'].includes(command)) {
             return await handleMapCommands(channel, messageObj, commandArgs, command);
         }
@@ -218,15 +325,22 @@ async function handleInGameChat(message) {
             if (lowerContent.includes('changed beatmap to') || lowerContent.includes('beatmap changed to') || lowerContent.includes('selected:')) {
                 const match = content.match(/\/(?:b|beatmaps)\/(\d+)/i) || content.match(/b\/(\d+)/i);
                 if (match && match[1]) {
-                    setRoomCurrentMap(channelName, match[1]);
-                    console.log(`[BanchoBot Tracker] 🗺️ Đã lưu Beatmap ID: ${match[1]}`);
+                    const mapId = match[1];
+                    const currentMap = currentRoomMapId.get(channelName);
+                    if (currentMap === mapId) {
+                        console.log(`[BanchoBot Tracker] ℹ️ Map ID ${mapId} trùng với map hiện tại của ${channelName}, bỏ qua.`);
+                        return;
+                    }
+                    setRoomCurrentMap(channelName, mapId);
+                    console.log(`[BanchoBot Tracker] 🗺️ Đã lưu Beatmap ID: ${mapId}`);
+                    await sendBeatmapInfoAndDL(channel, mapId);
                 }
                 return;
             }
 
             if (lowerContent.includes('joined in slot')) {
                 const joinedUser = content.split(' joined in slot')[0].trim();
-                if (joinedUser) addPlayerToQueue(channelName, joinedUser);
+                if (joinedUser) await handlePlayerJoin(channel, joinedUser);
                 return;
             }
 
@@ -237,11 +351,16 @@ async function handleInGameChat(message) {
             }
 
             if (lowerContent.includes('the match has finished')) {
+                const matchId = channelName.replace('#mp_', '');
+                
+                // ⚙️ TỰ ĐỘNG RESET VỀ SETTING CHUẨN + FREEMOD + KHÔNG MẬT KHẨU SAU MỖI TRẬN
+                if (is247CommunityRoom(matchId) || isAutohostOn(channelName)) {
+                    await reset247RoomLobbyDefaults(channel);
+                }
+
                 if (isAutohostOn(channelName)) {
                     if (isRotatingMap.get(channelName)) return;
                     isRotatingMap.set(channelName, true);
-
-                    await channel.sendMessage('YUE: Trận đấu kết thúc! Đổi Host cho người tiếp theo...');
 
                     setTimeout(async () => {
                         try {
@@ -251,7 +370,7 @@ async function handleInGameChat(message) {
                         } finally {
                             isRotatingMap.set(channelName, false);
                         }
-                    }, 2000);
+                    }, 1000);
                 }
                 return;
             }
@@ -259,7 +378,7 @@ async function handleInGameChat(message) {
             return;
         }
 
-        if (content.toLowerCase() === '.yue help' || content.startsWith('.help') || content.startsWith('!help')) {
+        if (content.toLowerCase() === '.yue help' || content.startsWith('.help') || content.startsWith('!help') || content.startsWith('.info') || content.startsWith('!info')) {
             const now = Date.now();
             const lastHelpUsed = channelCooldowns.get(`${channelName}_help`) || 0;
             if (now - lastHelpUsed < 5000) return;
@@ -270,6 +389,7 @@ async function handleInGameChat(message) {
 
         const firstWord = content.split(/ +/)[0].toLowerCase();
         const standardCommands = [
+            '.sr', '!sr', '.stars', '!stars', '.vote', '!vote', '.roominfo', '!roominfo', '.247', '!247',
             '.host', '!host',
             '.addref', '!addref', '.rmref', '!rmref', '.refs', '!refs',
             '.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random',
@@ -289,52 +409,7 @@ async function handleInGameChat(message) {
             if (now - lastUsed < COOLDOWN_TIME_MS) return;
             channelCooldowns.set(channelName, now);
 
-            const userPrompt = content.substring(firstWord.length).trim();
-            if (!userPrompt) {
-                return await channel.sendMessage(`YUE: Kêu tui gì đó ${senderUsername}? Gõ ".yue <câu_hỏi>" để chat!`);
-            }
-
-            try {
-                const lobby = channel.lobby;
-                const slots = lobby?.slots || [];
-                const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
-                const hostUser = lobby?.host?.username || slots.find(s => s && s.user && s.isHost)?.user?.username || activePlayers[0] || 'Chưa rõ';
-
-                let senderRole = "Player thường";
-                if (isCurrentHost(channel, senderUsername)) senderRole = "Host";
-                else if (isUserRef(channelName, senderUsername)) senderRole = "Ref";
-
-                let currentMapText = 'Chưa chọn map';
-                const savedMapId = currentRoomMapId.get(channelName);
-                if (savedMapId) {
-                    const mapInfo = await fetchBeatmapDetail(savedMapId);
-                    if (mapInfo) currentMapText = mapInfo;
-                }
-
-                const ingameContext = {
-                    host: hostUser,
-                    sender: senderUsername,
-                    senderRole: senderRole,
-                    playerCount: activePlayers.length,
-                    playersList: activePlayers.join(', '),
-                    currentMap: currentMapText
-                };
-
-                const aiRawJson = await askYue(`ingame_${senderUsername}`, senderUsername, userPrompt, null, false, ingameContext);
-                const aiData = JSON.parse(aiRawJson);
-
-                if (aiData.reply) {
-                    await channel.sendMessage(`YUE: ${aiData.reply}`);
-                }
-
-                if (aiData.command && aiData.command.trim() !== '') {
-                    await executeRoutedCommand(channel, message, aiData.command.trim(), senderUsername);
-                }
-
-            } catch (err) {
-                console.error('❌ Lỗi AI In-Game (JSON Parse):', err.message);
-                return await channel.sendMessage(`YUE: Lú quá xử lý không nổi lệnh này rồi ông bạn...`);
-            }
+            return await handle247RoomCommands(channel, message, content, senderUsername);
         }
     } catch (globalErr) {
         console.error('💥 Lỗi toàn cục handleInGameChat:', globalErr.message);
