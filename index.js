@@ -74,6 +74,8 @@ client.once('clientReady', async () => {
     // Khởi tạo Bancho IRC cho phòng Multi 24/7 nếu được bật trong config
     if (isFeatureEnabled('multiOsu')) {
         try {
+            const { setDiscordClient } = await import('./src/services/multi247/room247Manager.js');
+            setDiscordClient(client);
             const { initBancho } = await import('./src/services/osu/banchoService.js');
             await initBancho();
         } catch (bErr) {

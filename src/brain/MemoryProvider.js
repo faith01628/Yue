@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const DB_PATH = path.resolve('./src/data/yueMemory.json');
+const DB_PATH = path.resolve('data/yueMemory.json');
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 export class MemoryProvider {

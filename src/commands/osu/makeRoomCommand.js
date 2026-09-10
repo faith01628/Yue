@@ -5,6 +5,32 @@ import { register247Room } from '../../services/multi247/room247Manager.js';
 import { botConfig } from '../../config/botConfig.js';
 import { enableAutohostForChannel } from '../osuInGame/hostCommands.js';
 
+export function build247RoomEmbed(matchId, roomName, ownerOsuName, discordUsername, inviteStatusText = '', isRecreated = false) {
+    const mpUrl = `https://osu.ppy.sh/community/matches/${matchId}`;
+    const statusHeader = isRecreated
+        ? `🔄 **Phòng 24/7 đã tự động tái tạo mới sau 20 phút vắng người!**${inviteStatusText}`
+        : `Phòng Multiplayer đã được tạo thành công!${inviteStatusText}`;
+
+    return new EmbedBuilder()
+        .setColor('#00b0f4')
+        .setAuthor({ name: '🌐 osu! 24/7 Community Room Created' })
+        .setTitle(`🎮 ${roomName}`)
+        .setURL(mpUrl)
+        .setDescription(
+            `${statusHeader}\n\n` +
+            `▸ **Match ID:** \`${matchId}\`\n` +
+            `▸ **Chủ phòng (osu!):** \`${ownerOsuName}\`\n` +
+            `▸ **Phân loại phòng:** 🛡️ **Chế độ 24/7 Cộng đồng**: Đã bật Anti-Spam, Lọc Toxic, Anti-Scam Link Blocker, Auto-Rejoin 24/7 & AI Trợ Lý Đa Ngôn Ngữ!\n` +
+            `▸ **Link Match History:** [Bấm vào đây để xem chi tiết trận đấu](${mpUrl})\n\n` +
+            `🛠️ **Lệnh điều khiển nhanh:**\n` +
+            `• Mời người chơi: \`.inv ${matchId} <tên_player>\`\n` +
+            `• Đóng phòng này: \`.mc ${matchId}\`\n\n` +
+            `✨ *Ghi chú: Khi **${ownerOsuName}** join vào phòng, Yue sẽ tự trao Host & Ref luôn nhé!*`
+        )
+        .setFooter({ text: `Chủ phòng Discord: ${discordUsername || 'katashi'} • Match ID: ${matchId}` })
+        .setTimestamp();
+}
+
 export async function handleMakeRoomCommand(message) {
     const args = message.content.trim().split(/ +/).slice(1);
     const cmdFirstWord = message.content.trim().split(/ +/)[0].toLowerCase();
@@ -78,9 +104,11 @@ export async function handleMakeRoomCommand(message) {
             if (joinedPlayerName && joinedPlayerName.toLowerCase() === ownerOsuName.toLowerCase() && !hasGrantedRights) {
                 hasGrantedRights = true;
                 try {
-                    await lobby.setHost(ownerOsuName);
+                    if (!is247Requested) {
+                        await lobby.setHost(ownerOsuName);
+                    }
                     await channel.sendMessage(`!mp addref ${ownerOsuName}`);
-                    await channel.sendMessage(`YUE: Đã giao quyền Host và Referee cho chủ phòng ${ownerOsuName}!`);
+                    await channel.sendMessage(`YUE: Granted Host and Referee rights to room owner ${ownerOsuName}!`);
                 } catch (err) {
                     console.error('Lỗi khi set Host/Ref:', err);
                 }
@@ -106,15 +134,7 @@ export async function handleMakeRoomCommand(message) {
             createdAt: Date.now()
         });
 
-        if (is247Requested) {
-            register247Room(matchId, {
-                roomName: roomName,
-                ownerDiscordId: message.author.id,
-                ownerOsuName: ownerOsuName,
-                starMin: 0.0,
-                starMax: 6.0
-            });
-        } else {
+        if (!is247Requested) {
             // ⏳ PHÒNG THƯỜNG: TỰ ĐỘNG ĐÓNG SAU 15 PHÚT KHÔNG HOẠT ĐỘNG
             setTimeout(async () => {
                 const lobbyItem = activeLobbies.get(matchId);
@@ -122,7 +142,7 @@ export async function handleMakeRoomCommand(message) {
                     try {
                         const mpChannel = channel;
                         if (mpChannel) {
-                            await mpChannel.sendMessage('YUE: Phòng thường đã hết hạn 15 phút không hoạt động. Đóng phòng!');
+                            await mpChannel.sendMessage('YUE: Normal room expired after 15 minutes of inactivity. Closing room!');
                             await mpChannel.sendMessage('!mp close');
                         }
                     } catch (e) {
@@ -141,31 +161,46 @@ export async function handleMakeRoomCommand(message) {
 
         const mpUrl = `https://osu.ppy.sh/community/matches/${matchId}`;
 
-        const roomTypeTitle = is247Requested ? '🌐 osu! 24/7 Community Room Created' : '🎮 osu! Normal Multiplayer Room Created';
-        const roomTypeDesc = is247Requested
-            ? `🛡️ **Chế độ 24/7 Cộng đồng**: Đã bật Anti-Spam, Lọc Toxic, Anti-Scam Link Blocker, Auto-Rejoin 24/7 & AI Trợ Lý Đa Ngôn Ngữ!`
-            : `⚡ **Chế độ Thường**: Quản lý cơ bản (.ah, .host, .map, .a). Tự đóng khi ngắt kết nối.`;
+        let embed;
+        if (is247Requested) {
+            embed = build247RoomEmbed(matchId, roomName, ownerOsuName, message.author.username, inviteStatusText);
+        } else {
+            embed = new EmbedBuilder()
+                .setColor('#2b2d31')
+                .setAuthor({ name: '🎮 osu! Normal Multiplayer Room Created' })
+                .setTitle(`🎮 ${lobby.name}`)
+                .setURL(mpUrl)
+                .setDescription(
+                    `Phòng Multiplayer đã được tạo thành công!${inviteStatusText}\n\n` +
+                    `▸ **Match ID:** \`${matchId}\`\n` +
+                    `▸ **Chủ phòng (osu!):** \`${ownerOsuName}\`\n` +
+                    `▸ **Phân loại phòng:** ⚡ **Chế độ Thường**: Quản lý cơ bản (.ah, .host, .map, .a). Tự đóng khi ngắt kết nối.\n` +
+                    `▸ **Link Match History:** [Bấm vào đây để xem chi tiết trận đấu](${mpUrl})\n\n` +
+                    `🛠️ **Lệnh điều khiển nhanh:**\n` +
+                    `• Mời người chơi: \`.inv ${matchId} <tên_player>\`\n` +
+                    `• Đóng phòng này: \`.mc ${matchId}\`\n\n` +
+                    `✨ *Ghi chú: Khi **${ownerOsuName}** join vào phòng, Yue sẽ tự trao Host & Ref luôn nhé!*`
+                )
+                .setFooter({ text: `Chủ phòng Discord: ${message.author.username} • Match ID: ${matchId}` })
+                .setTimestamp();
+        }
 
-        const embed = new EmbedBuilder()
-            .setColor(is247Requested ? '#00b0f4' : '#2b2d31')
-            .setAuthor({ name: roomTypeTitle })
-            .setTitle(`🎮 ${lobby.name}`)
-            .setURL(mpUrl)
-            .setDescription(
-                `Phòng Multiplayer đã được tạo thành công!${inviteStatusText}\n\n` +
-                `▸ **Match ID:** \`${matchId}\`\n` +
-                `▸ **Chủ phòng (osu!):** \`${ownerOsuName}\`\n` +
-                `▸ **Phân loại phòng:** ${roomTypeDesc}\n` +
-                `▸ **Link Match History:** [Bấm vào đây để xem chi tiết trận đấu](${mpUrl})\n\n` +
-                `🛠️ **Lệnh điều khiển nhanh:**\n` +
-                `• Mời người chơi: \`.inv ${matchId} <tên_player>\`\n` +
-                `• Đóng phòng này: \`.mc ${matchId}\`\n\n` +
-                `✨ *Ghi chú: Khi **${ownerOsuName}** join vào phòng, Yue sẽ tự trao Host & Ref luôn nhé!*`
-            )
-            .setFooter({ text: `Chủ phòng Discord: ${message.author.username} • Match ID: ${matchId}` })
-            .setTimestamp();
+        const sentMsg = await message.reply({ embeds: [embed] });
 
-        return message.reply({ embeds: [embed] });
+        if (is247Requested) {
+            register247Room(matchId, {
+                roomName: roomName,
+                ownerDiscordId: message.author.id,
+                ownerOsuName: ownerOsuName,
+                ownerDiscordTag: message.author.username,
+                starMin: 0.0,
+                starMax: 6.99,
+                discordChannelId: message.channel.id,
+                discordMessageId: sentMsg.id
+            });
+        }
+
+        return sentMsg;
 
     } catch (err) {
         console.error('Lỗi khi tạo room:', err);

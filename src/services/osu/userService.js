@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const DATA_FILE = path.resolve('src/data/users.json');
+const DATA_FILE = path.resolve('data/users.json');
 
 // Đảm bảo thư mục và file json tồn tại
 function ensureDataFile() {

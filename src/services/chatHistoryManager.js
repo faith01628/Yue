@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const HISTORY_DIR = path.join(__dirname, '../data/chatHistory');
+const HISTORY_DIR = path.resolve('data/chatHistory');
 const MAX_HISTORY_PER_CHANNEL = 500;
 
 // Đảm bảo thư mục lưu trữ tồn tại

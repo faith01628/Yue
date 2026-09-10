@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const MEMORY_FILE = path.resolve('src/data/multi247Memory.json');
+const MEMORY_FILE = path.resolve('data/multi247Memory.json');
 
 function ensureMemoryFile() {
     const dir = path.dirname(MEMORY_FILE);

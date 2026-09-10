@@ -79,9 +79,13 @@ const defaultFullConfig = {
         community247Rooms: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : true, // Cho phép tạo/vận hành phòng 24/7 (.mr247, .rooms247)
         defaultRoomName: process.env.OSU_MULTI_DEFAULT_ROOM_NAME || "Yue's Community Autohost Room",
         default247RoomName: process.env.OSU_MULTI_247_DEFAULT_ROOM_NAME || "Yue's 24/7 Community Room",
-        keepAliveHeartbeat: true,            // Vòng lặp 8 phút gửi !mp settings giữ phòng 24/7 không bị đóng
+        keepAliveHeartbeat: true,            // Tự động đóng & tái tạo phòng 24/7 mới sau 20 phút vắng người + cập nhật Embed Discord
         safetyGuard: true,                   // Bộ lọc Anti-Spam & Profanity 5-Strike nhiều ngôn ngữ
         multilingualChat: true,              // Chat tiếng Anh mặc định + tự dịch đa ngôn ngữ
+        aiMatchCommentary: true,             // Tự động bình luận trận đấu & MVP/Choke
+        welcomeShoutouts: false,             // Lời chào cá nhân hóa (🔴 Đã TẮT theo yêu cầu)
+        dailyLeaderboard: true,              // Bảng xếp hạng Peak PP Ngày (Reset 0:00 midnight)
+        afkHostTimer: true,                  // Trợ lý nhắc nhở Host AFK sau 45s
         inGameCommands: {
             hostCommands: true,              // Lệnh IRC cho Host (!start, !mp, !autohost, !next...)
             mapCommands: true,               // Lệnh chọn/search map (!r, !map, !fm...)
@@ -120,8 +124,8 @@ function getActiveConfig() {
                 ...defaultFullConfig.osuMultiplayer,
                 enabled: process.env.OSU_MULTI_ENABLED !== undefined ? process.env.OSU_MULTI_ENABLED === 'true' : true,
                 normalRooms: process.env.OSU_MULTI_NORMAL_ROOMS !== undefined ? process.env.OSU_MULTI_NORMAL_ROOMS === 'true' : true, // 🟢 BẬT Phòng Thường trên VPS
-                community247Rooms: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : false, // 🔴 TẮT Phòng 24/7 trên VPS (đang thử nghiệm ở Local)
-                keepAliveHeartbeat: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : false,
+                community247Rooms: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : true, // 🟢 BẬT Phòng 24/7 trên VPS
+                keepAliveHeartbeat: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : true,
             }
         };
     }

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { botConfig, isFeatureOn, isHeavyLibraryOn } from '../config/botConfig.js';
 
-const TOGGLES_FILE = path.resolve('src/data/featureToggles.json');
+const TOGGLES_FILE = path.resolve('data/featureToggles.json');
 
 const DEFAULT_TOGGLES = {
     chatDiscord: botConfig.discord?.aiChat ?? true,

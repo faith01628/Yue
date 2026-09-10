@@ -2,12 +2,89 @@ import { isUserRef } from './refCommands.js';
 import { clearLobbyRequests } from './mapCommands.js';
 import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
 import { activeLobbies } from '../../services/osu/banchoService.js';
+import { botConfig } from '../../config/botConfig.js';
+import { updatePlayer247Memory } from '../../services/multi247/room247Memory.js';
+import { get247RoomConfig } from '../../services/multi247/room247Manager.js';
 
 const autohostQueues = new Map();
 const isAutohostActive = new Map();
 const skipVotes = new Map();
+const afkHostTimers = new Map();
+const welcomeCooldowns = new Map();
+const roomEmptyStatusMap = new Map();
 
-function getQueue(channelName) {
+export function setRoomEmptyStatus(channelName, isEmpty) {
+    if (!channelName) return;
+    const key = typeof channelName === 'string' ? channelName : (channelName?.name || '');
+    if (key) {
+        roomEmptyStatusMap.set(key, !!isEmpty);
+    }
+}
+
+export function isRoomEmpty(channelName) {
+    if (!channelName) return true;
+    const key = typeof channelName === 'string' ? channelName : (channelName?.name || '');
+    if (!key) return true;
+    if (!roomEmptyStatusMap.has(key)) return true;
+    return !!roomEmptyStatusMap.get(key);
+}
+
+export function resetRoomHostState(channelName) {
+    if (!channelName) return;
+    const key = typeof channelName === 'string' ? channelName : (channelName?.name || '');
+    if (!key) return;
+    roomEmptyStatusMap.set(key, true);
+    lastAssignedHostMap.delete(key);
+    autohostQueues.set(key, []);
+    skipVotes.delete(key);
+    clearAfkHostTimer(key);
+}
+
+export function clearAfkHostTimer(channelName) {
+    const key = typeof channelName === 'string' ? channelName : channelName?.name;
+    if (key && afkHostTimers.has(key)) {
+        clearTimeout(afkHostTimers.get(key));
+        afkHostTimers.delete(key);
+    }
+}
+
+export function startAfkHostTimer(channel, hostUsername) {
+    const channelName = typeof channel === 'string' ? channel : channel?.name;
+    if (!channelName) return;
+    clearAfkHostTimer(channelName);
+
+    if (!botConfig.osuMultiplayer?.afkHostTimer) return;
+    if (!hostUsername) return;
+
+    const lowerHost = hostUsername.toLowerCase();
+    if (lowerHost.includes('banchobot') || lowerHost.includes('yue')) return;
+
+    const timer = setTimeout(async () => {
+        try {
+            if (!isAutohostActive.get(channelName)) return;
+
+            const matchIdNum = channelName.replace('#mp_', '');
+            const roomConfig = get247RoomConfig(matchIdNum);
+            const starMin = roomConfig?.starMin ?? 0.0;
+            const starMax = roomConfig?.starMax ?? 6.99;
+
+            const roomLang = await getRoomLanguage(channel);
+            const msg = roomLang === 'en'
+                ? `YUE: Hey ${hostUsername}, need a map? Type !r or pick a map (${starMin.toFixed(1)}★ - ${starMax.toFixed(2)}★)! Type .next to pass host if AFK!`
+                : `YUE: Ê ${hostUsername}, chọn map nào đi nè! Gõ !r hoặc chọn map (${starMin.toFixed(1)}★ - ${starMax.toFixed(2)}★)! Gõ .next nếu muốn nhường host nhé!`;
+
+            if (typeof channel === 'object' && typeof channel.sendMessage === 'function') {
+                await channel.sendMessage(msg);
+            }
+        } catch (err) {
+            console.error('[AFK Host Timer Error]:', err.message);
+        }
+    }, 45000);
+
+    afkHostTimers.set(channelName, timer);
+}
+
+export function getQueue(channelName) {
     if (!autohostQueues.has(channelName)) {
         autohostQueues.set(channelName, []);
     }
@@ -50,13 +127,30 @@ export function isAutohostOn(channelName) {
 /**
  * 🎯 BẬT TỰ ĐỘNG AUTOHOST KHI TẠO PHÒNG MULTI
  */
-export function enableAutohostForChannel(channel) {
+export async function enableAutohostForChannel(channel) {
     const channelName = typeof channel === 'string' ? channel : (channel.name || channel);
     isAutohostActive.set(channelName, true);
+    setRoomEmptyStatus(channelName, true);
+    lastAssignedHostMap.delete(channelName);
+
     if (typeof channel === 'object') {
+        try {
+            const { attachLobbyEvents } = await import('../../services/osu/banchoService.js');
+            attachLobbyEvents(channel);
+        } catch (e) {}
+
+        const updateFn = channel.lobby?.updateSettings || channel.lobby?.update;
+        if (typeof updateFn === 'function') {
+            try {
+                await Promise.race([
+                    updateFn.call(channel.lobby),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Lobby update timeout')), 3000))
+                ]);
+            } catch (e) {}
+        }
         syncLobbyPlayersToQueue(channel);
     }
-    console.log(`[Autohost] 🟢 Đã tự động BẬT Autohost cho phòng ${channelName}`);
+    console.log(`[Autohost] 🟢 Đã tự động BẬT Autohost cho phòng ${channelName} (Đặt trạng thái mặc định isEmpty = true)`);
 }
 
 function isCurrentHost(channel, username) {
@@ -76,23 +170,38 @@ function isCurrentHost(channel, username) {
  * 🎯 ĐỒNG BỘ HÀNG ĐỢI XOAY VÒNG BẮT ĐẦU TỪ HOST HIỆN TẠI (Ví dụ: 4 -> 5 -> 6 -> 1 -> 2 -> 3)
  */
 export function syncLobbyPlayersToQueue(channel) {
-    const channelName = channel.name;
-    if (!isAutohostActive.get(channelName)) return;
+    const channelName = typeof channel === 'string' ? channel : (channel?.name || '');
+    if (!channelName || !isAutohostActive.get(channelName)) return;
 
     const queue = getQueue(channelName);
-    const slots = channel.lobby?.slots || [];
+    const slots = (typeof channel === 'object' && channel?.lobby?.slots) ? channel.lobby.slots : [];
     
     // Lấy danh sách tất cả người chơi thực tế theo thứ tự slot
     const currentPlayers = slots
-        .filter(slot => slot && slot.user)
-        .map(slot => slot.user.username);
+        .filter(slot => slot && slot.user && slot.user.username)
+        .map(slot => slot.user.username)
+        .filter(name => !name.toLowerCase().includes('banchobot') && !name.toLowerCase().includes('yue'));
 
-    if (currentPlayers.length === 0) return;
+    if (currentPlayers.length === 0) {
+        setRoomEmptyStatus(channelName, true);
+        queue.length = 0;
+        return;
+    }
 
-    // 1. Nếu hàng đợi đang trống (lần đầu bật .ah)
+    setRoomEmptyStatus(channelName, false);
+
+    // 1. Tự dọn dẹp những player KHÔNG CÒN Ở TRONG PHÒNG nữa khỏi queue
+    for (let i = queue.length - 1; i >= 0; i--) {
+        const inRoom = currentPlayers.some(p => p.toLowerCase() === queue[i].toLowerCase());
+        if (!inRoom) {
+            queue.splice(i, 1);
+        }
+    }
+
+    // 2. Nếu hàng đợi đang trống
     if (queue.length === 0) {
         // Tìm host thực tế trong phòng
-        const hostSlot = slots.find(s => s && s.user && s.isHost);
+        const hostSlot = slots.find(s => s && s.user && s.isHost && !s.user.username.toLowerCase().includes('banchobot') && !s.user.username.toLowerCase().includes('yue'));
         const currentHostUsername = hostSlot?.user?.username || currentPlayers[0];
 
         const hostIndex = currentPlayers.findIndex(
@@ -100,31 +209,88 @@ export function syncLobbyPlayersToQueue(channel) {
         );
 
         if (hostIndex !== -1) {
-            // Cắt từ Host đến hết + nối phần từ đầu đến trước Host
             const reorderedQueue = [
                 ...currentPlayers.slice(hostIndex),
                 ...currentPlayers.slice(0, hostIndex)
             ];
-            queue.push(...reorderedQueue);
+            for (const p of reorderedQueue) {
+                if (!queue.some(q => q.toLowerCase() === p.toLowerCase())) {
+                    queue.push(p);
+                }
+            }
         } else {
-            queue.push(...currentPlayers);
-        }
-    } else {
-        // 2. Tự dọn dẹp những player đã rời khỏi phòng khỏi queue
-        for (let i = queue.length - 1; i >= 0; i--) {
-            const inRoom = currentPlayers.some(p => p.toLowerCase() === queue[i].toLowerCase());
-            if (!inRoom) {
-                queue.splice(i, 1);
+            for (const p of currentPlayers) {
+                if (!queue.some(q => q.toLowerCase() === p.toLowerCase())) {
+                    queue.push(p);
+                }
             }
         }
-
-        // 3. Nếu hàng đợi đã chạy, thêm người mới gia nhập vào cuối queue
+    } else {
+        // 3. Thêm người mới gia nhập vào cuối queue nếu chưa có
         for (const player of currentPlayers) {
             const exists = queue.some(p => p.toLowerCase() === player.toLowerCase());
             if (!exists) {
                 queue.push(player);
             }
         }
+    }
+}
+
+const lastAssignedHostMap = new Map();
+
+export async function setHostSafely(channel, targetUsername, isRotation = false) {
+    if (!channel || !targetUsername) return;
+    const channelName = typeof channel === 'string' ? channel : (channel.name || channel);
+    if (!channelName) return;
+
+    let chanObj = (typeof channel === 'object' && typeof channel.sendMessage === 'function')
+        ? channel
+        : null;
+
+    if (!chanObj && typeof channel === 'string') {
+        const matchId = channelName.replace('#mp_', '');
+        const lobbyData = activeLobbies.get(matchId);
+        if (lobbyData && lobbyData.channel) {
+            chanObj = lobbyData.channel;
+        } else {
+            try {
+                const { getBanchoClient } = await import('../../services/osu/banchoService.js');
+                const bClient = getBanchoClient();
+                if (bClient) chanObj = bClient.getChannel(channelName);
+            } catch (e) {}
+        }
+    }
+
+    const lowerTarget = targetUsername.toLowerCase();
+    const lastHost = lastAssignedHostMap.get(channelName);
+
+    if (!isRotation && lastHost && lastHost.toLowerCase() === lowerTarget) {
+        return;
+    }
+
+    lastAssignedHostMap.set(channelName, lowerTarget);
+
+    if (chanObj) {
+        try {
+            await chanObj.sendMessage(`!mp host ${targetUsername}`);
+            startAfkHostTimer(chanObj, targetUsername);
+        } catch (err) {
+            console.error('[setHostSafely Error]:', err.message);
+        }
+    } else {
+        console.warn(`[setHostSafely] ⚠️ Không tìm thấy channel object để gửi !mp host ${targetUsername} tới ${channelName}`);
+    }
+}
+
+export function addPlayerToQueueSilently(channelName, username) {
+    if (!channelName || !username) return;
+    const cleanUser = username.replace(/^wiki:/i, '').trim();
+    const lowerUser = cleanUser.toLowerCase();
+    if (!cleanUser || lowerUser.includes('banchobot') || lowerUser.includes('yue')) return;
+    const queue = getQueue(channelName);
+    const exists = queue.some(p => p.toLowerCase() === lowerUser);
+    if (!exists) {
+        queue.push(cleanUser);
     }
 }
 
@@ -139,49 +305,75 @@ export async function handlePlayerJoin(channel, username) {
         const lobbyData = activeLobbies.get(matchId);
         if (lobbyData && lobbyData.channel) {
             chanObj = lobbyData.channel;
+        } else {
+            try {
+                const { getBanchoClient } = await import('../../services/osu/banchoService.js');
+                const bClient = getBanchoClient();
+                if (bClient) chanObj = bClient.getChannel(channelName);
+            } catch (e) {}
+        }
+    }
+
+    const cleanUser = username.replace(/^wiki:/i, '').trim();
+    const lowerUser = cleanUser.toLowerCase();
+    if (!cleanUser || lowerUser.includes('banchobot') || lowerUser.includes('yue')) return;
+
+    // Lời chào cá nhân hóa cho người chơi mới/quay lại
+    if (botConfig.osuMultiplayer?.welcomeShoutouts) {
+        const cdKey = `${channelName}_${lowerUser}`;
+        const now = Date.now();
+        const lastWelcome = welcomeCooldowns.get(cdKey) || 0;
+        if (now - lastWelcome > 60000) {
+            welcomeCooldowns.set(cdKey, now);
+            const userMem = updatePlayer247Memory(cleanUser, { visitCountInc: true });
+            const visits = userMem?.visitCount || 1;
+
+            setTimeout(async () => {
+                try {
+                    const roomLang = await getRoomLanguage(channel);
+                    let welcomeMsg = '';
+                    if (visits === 1) {
+                        welcomeMsg = roomLang === 'en'
+                            ? `YUE: Welcome to the room ${cleanUser}! Enjoy your stay & GLHF! 🎮`
+                            : `YUE: Chào mừng ${cleanUser} lần đầu ghé phòng! Chơi vui vẻ nha! 🎮`;
+                    } else {
+                        welcomeMsg = roomLang === 'en'
+                            ? `YUE: Welcome back ${cleanUser}! (Visit #${visits}) GLHF! ⚡`
+                            : `YUE: Chào mừng ${cleanUser} đã quay lại! (Lần thứ ${visits}) GLHF! ⚡`;
+                    }
+                    if (typeof chanObj === 'object' && typeof chanObj.sendMessage === 'function') {
+                        await chanObj.sendMessage(welcomeMsg);
+                    }
+                } catch (wErr) {
+                    console.error('[Welcome Shoutout Error]:', wErr.message);
+                }
+            }, 1200);
         }
     }
 
     if (!isAutohostActive.get(channelName)) return;
 
-    // 1. Đồng bộ danh sách người chơi trong phòng với queue
+    const queue = getQueue(channelName);
+    const wasEmpty = isRoomEmpty(channelName) || queue.length === 0;
+
+    const exists = queue.some(p => p.toLowerCase() === lowerUser || p.toLowerCase() === username.toLowerCase());
+    if (!exists) {
+        if (wasEmpty) {
+            queue.unshift(cleanUser);
+        } else {
+            queue.push(cleanUser);
+        }
+    }
+
     if (typeof chanObj === 'object' && chanObj?.lobby) {
         syncLobbyPlayersToQueue(chanObj);
-    } else {
-        const queue = getQueue(channelName);
-        const exists = queue.some(p => p.toLowerCase() === username.toLowerCase());
-        if (!exists) {
-            queue.push(username);
-        }
     }
 
-    const queue = getQueue(channelName);
+    const cleanQueue = getQueue(channelName);
 
-    // 2. Kiểm tra xem trong phòng đã có Host thực tế chưa
-    let hasHost = false;
-    let activePlayerCount = 0;
-
-    if (typeof chanObj === 'object' && chanObj?.lobby?.slots) {
-        const slots = chanObj.lobby.slots.filter(s => s && s.user);
-        activePlayerCount = slots.length;
-        hasHost = slots.some(s => s.isHost);
-    } else {
-        activePlayerCount = queue.length;
-    }
-
-    // 3. CHỈ TỰ ĐỘNG CHỈ ĐỊNH HOST NẾU PHÒNG CHƯA CÓ HOST NÀO VÀ ĐÂY LÀ NGƯỜI DUY NHẤT
-    if (!hasHost && activePlayerCount === 1 && queue.length === 1) {
-        autohostQueues.set(channelName, [username]);
-        clearSkipVotes(channelName);
-
-        if (typeof chanObj === 'object' && typeof chanObj.sendMessage === 'function') {
-            try {
-                await chanObj.sendMessage(`!mp host ${username}`);
-                await chanObj.sendMessage(`YUE: Next host: ${username}`);
-            } catch (err) {
-                console.error('[handlePlayerJoin Host Assign Error]:', err.message);
-            }
-        }
+    if (wasEmpty || cleanQueue.length === 1) {
+        setRoomEmptyStatus(channelName, false);
+        await setHostSafely(chanObj || channel, cleanQueue[0], true);
     }
 }
 
@@ -190,8 +382,8 @@ export function addPlayerToQueue(channel, username) {
 }
 
 export async function removePlayerFromQueue(channel, username) {
-    const channelName = channel.name || channel;
-    if (!isAutohostActive.get(channelName)) return;
+    const channelName = typeof channel === 'string' ? channel : (channel?.name || '');
+    if (!channelName || !isAutohostActive.get(channelName)) return;
 
     const queue = getQueue(channelName);
     const index = queue.findIndex(p => p.toLowerCase() === username.toLowerCase());
@@ -203,49 +395,82 @@ export async function removePlayerFromQueue(channel, username) {
         const votes = getVotes(channelName);
         votes.delete(username.toLowerCase());
 
-        if (wasHost && queue.length > 0) {
+        if (queue.length === 0) {
+            setRoomEmptyStatus(channelName, true);
+            lastAssignedHostMap.delete(channelName);
+            clearSkipVotes(channelName);
+            clearLobbyRequests(channelName);
+            console.log(`[Autohost] 🚪 Phòng ${channelName} đã hết người chơi. Chuyển trạng thái sang isEmpty = true.`);
+        } else if (wasHost && queue.length > 0) {
+            setRoomEmptyStatus(channelName, false);
             const roomLang = await getRoomLanguage(channel);
             clearSkipVotes(channelName); 
             clearLobbyRequests(channelName);
             const nextHost = queue[0];
-            await channel.sendMessage(`!mp host ${nextHost}`);
+            await setHostSafely(channel, nextHost, true);
             await channel.sendMessage(`YUE: Next host: ${formatQueueText(queue, roomLang)}`);
         }
     }
 }
 
 export async function rotateToNextHost(channel) {
-    const channelName = channel.name;
-    if (!isAutohostActive.get(channelName)) return;
+    const channelName = typeof channel === 'string' ? channel : (channel?.name || '');
+    if (!channelName || !isAutohostActive.get(channelName)) return;
+
+    if (typeof channel === 'object') {
+        const updateFn = channel.lobby?.updateSettings || channel.lobby?.update;
+        if (typeof updateFn === 'function') {
+            try {
+                await Promise.race([
+                    updateFn.call(channel.lobby),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Lobby update timeout')), 3000))
+                ]);
+            } catch (err) {
+                console.warn('[Autohost Rotate] ⚠️ Lobby update timeout/error:', err.message);
+            }
+        }
+    }
 
     const roomLang = await getRoomLanguage(channel);
     syncLobbyPlayersToQueue(channel);
     clearSkipVotes(channelName); 
     clearLobbyRequests(channelName);
 
-    const queue = getQueue(channelName);
+    const rawQueue = getQueue(channelName);
 
-    if (queue.length === 0) {
+    // Lọc dọn dẹp trùng lặp và bot
+    const cleanQueue = [];
+    for (const player of rawQueue) {
+        const lower = player.toLowerCase();
+        if (!lower.includes('banchobot') && !lower.includes('yue') && !cleanQueue.some(p => p.toLowerCase() === lower)) {
+            cleanQueue.push(player);
+        }
+    }
+
+    autohostQueues.set(channelName, cleanQueue);
+
+    if (cleanQueue.length === 0) {
         const emptyMsg = roomLang === 'en'
             ? 'YUE: [Autohost] Queue is empty, no players in room!'
             : 'YUE: [Autohost] Hàng đợi trống, không có ai trong phòng!';
         return await channel.sendMessage(emptyMsg);
     }
 
-    if (queue.length === 1) {
+    if (cleanQueue.length === 1) {
+        await setHostSafely(channel, cleanQueue[0], false);
         const soloMsg = roomLang === 'en'
-            ? `YUE: [Autohost] Only 1 player remaining (${queue[0]}), keeping Host!`
-            : `YUE: [Autohost] Trong phòng chỉ còn 1 người (${queue[0]}), tiếp tục giữ Host!`;
+            ? `YUE: [Autohost] Only 1 player remaining (${cleanQueue[0]}), keeping Host!`
+            : `YUE: [Autohost] Trong phòng chỉ còn 1 người (${cleanQueue[0]}), tiếp tục giữ Host!`;
         return await channel.sendMessage(soloMsg);
     }
 
-    const previousHost = queue.shift();
-    queue.push(previousHost);
+    const previousHost = cleanQueue.shift();
+    cleanQueue.push(previousHost);
 
-    const nextHost = queue[0];
+    const nextHost = cleanQueue[0];
 
-    await channel.sendMessage(`!mp host ${nextHost}`);
-    await channel.sendMessage(`YUE: Next host: ${formatQueueText(queue, roomLang)}`);
+    await setHostSafely(channel, nextHost, true);
+    await channel.sendMessage(`YUE: Next host: ${formatQueueText(cleanQueue, roomLang)}`);
 }
 
 export async function handleHostCommands(channel, message, args, command) {
@@ -263,8 +488,8 @@ export async function handleHostCommands(channel, message, args, command) {
         const targetSearch = args.join(' ').trim().toLowerCase();
         if (!targetSearch) {
             const usageMsg = roomLang === 'en'
-                ? `YUE: Please enter player username to transfer host (e.g. .host katashi)!`
-                : `YUE: Vui lòng nhập tên người chơi cần nhường host (Ví dụ: .host katashi)!`;
+                ? `YUE: Please enter player username to transfer host (e.g. .host PlayerName)!`
+                : `YUE: Vui lòng nhập tên người chơi cần nhường host (Ví dụ: .host <tên_người_chơi>)!`;
             return await channel.sendMessage(usageMsg);
         }
 
@@ -294,6 +519,7 @@ export async function handleHostCommands(channel, message, args, command) {
         }
 
         await channel.sendMessage(`!mp host ${matchedUser}`);
+        startAfkHostTimer(channel, matchedUser);
         return await channel.sendMessage(t('nextSuccess', roomLang, matchedUser));
     }
 

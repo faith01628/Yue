@@ -68,13 +68,23 @@ export async function recordRoomMatch(matchId, channelName = null) {
             beatmapInfo = await getBeatmapDetail(beatmapId);
         }
 
+        // Xây dựng Bảng ánh xạ User ID -> Real Username từ API Match Data
+        const userMap = new Map();
+        if (rawMatch.users && Array.isArray(rawMatch.users)) {
+            for (const u of rawMatch.users) {
+                const uId = u.user_id || u.id;
+                const uName = u.username;
+                if (uId && uName) userMap.set(String(uId), uName);
+            }
+        }
+
         // Lấy danh sách điểm số (Scores)
         const rawScores = lastGame.scores || [];
         const processedScores = [];
 
         for (const s of rawScores) {
             const userId = s.user_id || s.user?.id;
-            const username = s.user?.username || `User_${userId}`;
+            const username = s.user?.username || userMap.get(String(userId)) || `User_${userId}`;
             const totalScore = parseInt(s.score || 0);
             
             // Xử lý Accuracy
@@ -234,7 +244,7 @@ export async function generateEvaluationResponse(evalData, lang = 'vi', useAI = 
         return evalData?.message || 'Không tìm thấy dữ liệu trận đấu vừa rồi.';
     }
 
-    const isAiEnabled = botConfig?.discord?.aiChat ?? true;
+    const isAiEnabled = botConfig?.osuMultiplayer?.aiMatchCommentary !== false;
 
 
     // 🎯 TH1: Dùng Gemini AI nếu được bật để câu từ mềm mại & tự nhiên nhất
@@ -490,5 +500,78 @@ export async function handleMatchEvaluationCommand(channel, senderUsername, user
 
     return await channel.sendMessage(evalReply);
 }
+
+/**
+ * 5. Tự động sinh câu bình luận MVP & Choke cho toàn bộ trận đấu vừa kết thúc
+ */
+export async function generateMatchSummaryCommentary(matchSummary) {
+    if (!matchSummary || !matchSummary.scores || matchSummary.scores.length === 0) return null;
+
+    const validScores = matchSummary.scores.filter(s => {
+        const u = (s.username || '').toLowerCase();
+        return u && !u.includes('banchobot') && !u.includes('yue');
+    });
+
+    if (validScores.length === 0) return null;
+
+    const mvp = validScores[0];
+    const mvpName = formatCleanUsername(mvp.username);
+    const mvpScore = mvp.score || 0;
+    const mvpAcc = mvp.accuracy || 0;
+    const mvpMisses = mvp.misses || 0;
+
+    // Tìm Choke Player (Acc >= 92%, miss 1-5 hoặc maxcombo tốt nhưng miss)
+    const chokePlayer = validScores.find(s => {
+        const u = formatCleanUsername(s.username).toLowerCase();
+        if (u === mvpName.toLowerCase()) return false;
+        return s.misses > 0 && s.misses <= 5 && s.accuracy >= 92.0;
+    });
+
+    const totalAcc = validScores.reduce((sum, s) => sum + (s.accuracy || 0), 0);
+    const avgAcc = (totalAcc / validScores.length).toFixed(2);
+
+    const isAiEnabled = botConfig?.osuMultiplayer?.aiMatchCommentary !== false;
+
+    if (isAiEnabled) {
+        try {
+            const promptContext = `
+You are Yue - an expressive, witty, hype anime-style AI referee in an osu! multiplayer room.
+Generate 1 short, creative, and unique English IRC commentary sentence (< 180 chars) for this finished match:
+- Beatmap: ${matchSummary.beatmap?.title || 'Map'} [${matchSummary.beatmap?.version || 'Normal'}] (${(matchSummary.beatmap?.starRating || 0).toFixed(2)}★)
+- MVP: ${mvpName} (Score: ${mvpScore.toLocaleString('en-US')}, Acc: ${mvpAcc}%, Misses: ${mvpMisses})
+- Choke Player: ${chokePlayer ? `${formatCleanUsername(chokePlayer.username)} (${chokePlayer.accuracy}%, ${chokePlayer.misses}m)` : 'None'}
+- Room Avg Acc: ${avgAcc}%
+
+Rules:
+1. ONLY talk about real match stats provided above. Be energetic, witty, playful, or hype!
+2. Vary your phrasing every match - NEVER repeat identical templates!
+3. MUST prefix response with "YUE: ".
+4. Keep it under 180 characters.
+            `.trim();
+
+            const aiRawJson = await askYue(`ingame_summary_${matchSummary.matchId}`, "MatchReferee", "Summarize match MVP and choke", null, false, {
+                matchContext: promptContext
+            });
+
+            const aiParsed = JSON.parse(aiRawJson);
+            if (aiParsed && aiParsed.reply) {
+                return aiParsed.reply.startsWith('YUE:') ? aiParsed.reply : `YUE: ${aiParsed.reply}`;
+            }
+        } catch (aiErr) {
+            console.error('[MatchSummary AI Fallback Error]:', aiErr.message);
+        }
+    }
+
+    // Rule-Based Fallback (0 tokens)
+    const chokeName = chokePlayer ? formatCleanUsername(chokePlayer.username) : null;
+    if (validScores.length === 1) {
+        return `YUE: 🏆 Match Finished! MVP: ${mvpName} with ${mvpScore.toLocaleString('en-US')} pts (${mvpAcc}% Acc, ${mvpMisses}m). GG!`;
+    }
+    if (chokeName) {
+        return `YUE: 🏆 Match Finished! MVP: ${mvpName} (${mvpAcc}%, ${mvpScore.toLocaleString('en-US')} pts). 💔 Unlucky choke by ${chokeName} (${chokePlayer.misses}m)! Room Avg: ${avgAcc}%. GG!`;
+    }
+    return `YUE: 🏆 Match Finished! MVP: ${mvpName} (${mvpAcc}%, ${mvpScore.toLocaleString('en-US')} pts). Room Avg Acc: ${avgAcc}%. Well played everyone!`;
+}
+
 
 

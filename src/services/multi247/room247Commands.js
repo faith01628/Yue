@@ -203,7 +203,12 @@ export async function handle247RoomCommands(channel, message, commandString, sen
                 const aiCmd = aiData.command.trim();
                 console.log(`[AI Command Exec] 🤖 Executing command from AI for ${senderUsername} (${senderRole}): ${aiCmd}`);
                 const lowerCmd = aiCmd.toLowerCase();
-                if (lowerCmd.startsWith('.match') || lowerCmd.startsWith('.danhgia') || lowerCmd.startsWith('.review') || lowerCmd.startsWith('.rs') || lowerCmd.startsWith('.r')) {
+                const isEvalCmd = [
+                    '.match', '!match', '.danhgia', '!danhgia', '.review', '!review', '.eval', '!eval',
+                    '.rs', '!rs'
+                ].some(c => lowerCmd === c || lowerCmd.startsWith(c + ' ')) || lowerCmd === '.r' || lowerCmd === '!r' || lowerCmd.startsWith('.r ') || lowerCmd.startsWith('!r ');
+
+                if (isEvalCmd) {
                     await handleMatchEvaluationCommand(channel, senderUsername, aiCmd);
                 } else {
                     await executeRoutedCommand(channel, message, aiCmd, senderUsername);
