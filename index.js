@@ -28,7 +28,8 @@ import {
     handleOsuLinkSlashCommand,
     handleOsuStatCommand,
     handleNaturalLanguageMapRequest,
-    handlePickMapCommand
+    handlePickMapCommand,
+    handleTopMultiCommand
 } from './src/commands/osu/index.js';
 
 // 📦 NẠP AN TOÀN FFMPEG NẾU ĐƯỢC BẬT TRONG MASTER CONFIG
@@ -240,6 +241,10 @@ client.on('messageCreate', async (message) => {
     }
 
     // --- 2. CÁC LỆNH OSU! MULTIPLAYER & ROOM ---
+    if (['.topmulti', '!topmulti', '.tm', '!tm', '.topm', '!topm'].includes(firstWord)) {
+        return await handleTopMultiCommand(message);
+    }
+
     if (['.mr', '.mr247', '.make247', '.make-room', '.makeroom', '.lobby', '.inv', '.invite', '.invosu', '.close', '.matchclose', '.mc', '.joinroom', '!joinroom', '.jr', '!jr', '.jr247', '!jr247', '.join247', '.joinroom247', '.rooms247', '.list247', '.multi247'].includes(firstWord)) {
         if (!isFeatureEnabled('multiOsu')) {
             return await message.reply("🔴 Tính năng **Osu Multiplayer & 24/7 Room** tạm thời đang TẮT!");

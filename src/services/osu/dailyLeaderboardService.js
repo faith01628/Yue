@@ -4,6 +4,7 @@ import { calculateBeatmapPP } from './osuService.js';
 import { botConfig } from '../../config/botConfig.js';
 
 const LEADERBOARD_FILE = path.resolve('data/multi247DailyLeaderboard.json');
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getTodayDateString() {
     const now = new Date();
@@ -20,8 +21,7 @@ function ensureStorageFile() {
     }
     if (!fs.existsSync(LEADERBOARD_FILE)) {
         const initialData = {
-            date: getTodayDateString(),
-            players: {}
+            records: []
         };
         fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(initialData, null, 2), 'utf-8');
     }
@@ -31,24 +31,45 @@ function loadLeaderboardData() {
     ensureStorageFile();
     try {
         const raw = fs.readFileSync(LEADERBOARD_FILE, 'utf-8');
-        const data = JSON.parse(raw);
-        const today = getTodayDateString();
+        let data = JSON.parse(raw);
+        const now = Date.now();
 
-        // 🔄 TỰ ĐỘNG RESET BẢNG XẾP HẠNG VỀ 0 KHI QUA 0:00 SANG NGÀY MỚI
-        if (data.date !== today) {
-            console.log(`[Daily Leaderboard] 🌅 Đã sang ngày mới (${today}). Tự động reset Bảng Xếp Hạng Peak PP về rỗng!`);
-            const newData = {
-                date: today,
-                players: {}
-            };
-            saveLeaderboardData(newData);
-            return newData;
+        // 🔄 CHUYỂN ĐỔI DATA CŨ (Nếu có schema date/players) SANG DẠNG RECORDS LỊCH SỬ
+        if (data.players && !data.records) {
+            const records = [];
+            const oldDate = data.date || getTodayDateString();
+            for (const [lowerName, p] of Object.entries(data.players)) {
+                records.push({
+                    username: p.username || lowerName,
+                    lowerName: lowerName,
+                    userId: p.userId || null,
+                    pp: p.peakPp || 0,
+                    mapTitle: p.mapTitle || '',
+                    starRating: p.starRating || 0,
+                    timestamp: p.updatedAt || now,
+                    date: oldDate
+                });
+            }
+            data = { records };
+        }
+
+        if (!Array.isArray(data.records)) {
+            data.records = [];
+        }
+
+        // 🧹 TỰ ĐỘNG LỌC VÀ DỌN DẸP DỮ LIỆU CŨ HƠN 30 NGÀY
+        const initialLength = data.records.length;
+        data.records = data.records.filter(r => r && r.timestamp && (now - r.timestamp <= THIRTY_DAYS_MS));
+
+        if (data.records.length !== initialLength) {
+            console.log(`[Leaderboard Service] 🧹 Đã tự động dọn dẹp ${initialLength - data.records.length} bản ghi cũ hơn 30 ngày.`);
+            saveLeaderboardData(data);
         }
 
         return data;
     } catch (err) {
         console.error('❌ Lỗi đọc file multi247DailyLeaderboard.json:', err.message);
-        return { date: getTodayDateString(), players: {} };
+        return { records: [] };
     }
 }
 
@@ -82,6 +103,8 @@ export async function recordMatchDailyPeakPP(matchSummary) {
     const beatmapId = matchSummary.beatmap?.id;
     const starRating = matchSummary.beatmap?.starRating || 4.0;
     const beatmapTitle = matchSummary.beatmap?.title || 'Unknown Map';
+    const today = getTodayDateString();
+    const now = Date.now();
 
     let updatedCount = 0;
 
@@ -94,7 +117,7 @@ export async function recordMatchDailyPeakPP(matchSummary) {
 
         // 🛡️ CHỐNG EXPLOIT: Bỏ qua hoàn toàn nếu người chơi FAIL/QUIT (passed === false) hoặc thoát quá sớm (Combo < 15, Score < 30,000)
         if (scoreObj.passed === false || scoreObj.passed === 0 || (scoreObj.score || 0) < 30000 || (scoreObj.maxcombo || 0) < 15) {
-            console.log(`[Daily Leaderboard Filter] 🛡️ Bỏ qua play FAILED/QUIT của ${cleanName} (Passed: ${scoreObj.passed}, Score: ${scoreObj.score}, Combo: ${scoreObj.maxcombo})`);
+            console.log(`[Leaderboard Filter] 🛡️ Bỏ qua play FAILED/QUIT của ${cleanName} (Passed: ${scoreObj.passed}, Score: ${scoreObj.score}, Combo: ${scoreObj.maxcombo})`);
             continue;
         }
 
@@ -115,7 +138,7 @@ export async function recordMatchDailyPeakPP(matchSummary) {
                     calculatedPp = Math.round(ppRes.pp);
                 }
             } catch (ppErr) {
-                console.error(`[Daily Leaderboard] PP calc fallback for ${cleanName}:`, ppErr.message);
+                console.error(`[Leaderboard] PP calc fallback for ${cleanName}:`, ppErr.message);
             }
         }
 
@@ -128,26 +151,30 @@ export async function recordMatchDailyPeakPP(matchSummary) {
             calculatedPp = Math.max(1, Math.round(scoreRatio * (starRating * 45) * accFactor * (0.4 + 0.6 * comboRatio)));
         }
 
-        const existingPlayer = data.players[lowerName] || {
-            username: cleanName,
-            userId: scoreObj.userId || null,
-            peakPp: 0,
-            mapTitle: '',
-            starRating: 0,
-            updatedAt: 0
-        };
+        // Tìm bản ghi cao nhất trong ngày của người chơi này
+        const existingRecordIndex = data.records.findIndex(r => r.lowerName === lowerName && r.date === today);
+        const existingRecord = existingRecordIndex !== -1 ? data.records[existingRecordIndex] : null;
 
         // 🌟 CHỈ CẬP NHẬT NẾU KỶ LỤC MỚI CAO HƠN PEAK PP CŨ TRONG NGÀY
-        if (calculatedPp > existingPlayer.peakPp) {
-            console.log(`[Daily Leaderboard] ⚡ New Peak PP for ${cleanName}: ${calculatedPp}pp (Old: ${existingPlayer.peakPp}pp) on ${beatmapTitle}`);
-            data.players[lowerName] = {
+        if (!existingRecord || calculatedPp > existingRecord.pp) {
+            console.log(`[Leaderboard] ⚡ New Peak PP for ${cleanName}: ${calculatedPp}pp (Old: ${existingRecord?.pp || 0}pp) on ${beatmapTitle}`);
+            
+            const newRecord = {
                 username: cleanName,
-                userId: scoreObj.userId || existingPlayer.userId || null,
-                peakPp: calculatedPp,
+                lowerName: lowerName,
+                userId: scoreObj.userId || existingRecord?.userId || null,
+                pp: calculatedPp,
                 mapTitle: beatmapTitle,
                 starRating: parseFloat(starRating.toFixed(2)),
-                updatedAt: Date.now()
+                timestamp: now,
+                date: today
             };
+
+            if (existingRecordIndex !== -1) {
+                data.records[existingRecordIndex] = newRecord;
+            } else {
+                data.records.push(newRecord);
+            }
             updatedCount++;
         }
     }
@@ -160,19 +187,57 @@ export async function recordMatchDailyPeakPP(matchSummary) {
 }
 
 /**
- * 📊 2. Lấy Top N người chơi có Peak PP cao nhất trong ngày
+ * 📊 Helper: Lấy Top N người chơi có Peak PP cao nhất trong N ngày gần nhất
  */
-export function getTopDailyPeakPlayers(limit = 5) {
+export function getTopPlayersForPeriod(days = 1, limit = 5) {
     const data = loadLeaderboardData();
-    const playerList = Object.values(data.players || {});
+    const now = Date.now();
+    const cutoff = now - (days * 24 * 60 * 60 * 1000);
+    const todayStr = getTodayDateString();
 
-    playerList.sort((a, b) => b.peakPp - a.peakPp);
+    const filteredRecords = data.records.filter(r => {
+        if (days === 1) return r.date === todayStr;
+        return r.timestamp >= cutoff;
+    });
 
-    return playerList.slice(0, limit);
+    // Gom nhóm theo người chơi (giữ lại bản ghi PP cao nhất trong khoảng thời gian đó)
+    const playerBestMap = new Map();
+    for (const r of filteredRecords) {
+        const existing = playerBestMap.get(r.lowerName);
+        if (!existing || r.pp > existing.pp) {
+            playerBestMap.set(r.lowerName, r);
+        }
+    }
+
+    const sortedList = Array.from(playerBestMap.values());
+    sortedList.sort((a, b) => b.pp - a.pp);
+
+    return sortedList.slice(0, limit);
 }
 
 /**
- * 🎙️ 3. Tạo chuỗi thông báo Bảng Xếp Hạng Peak PP Top 5 chuẩn IRC link rút gọn
+ * 📊 2. Lấy Top N người chơi trong ngày
+ */
+export function getTopDailyPeakPlayers(limit = 5) {
+    return getTopPlayersForPeriod(1, limit);
+}
+
+/**
+ * 📊 3. Lấy Top N người chơi trong tuần (7 ngày)
+ */
+export function getTopWeeklyPeakPlayers(limit = 5) {
+    return getTopPlayersForPeriod(7, limit);
+}
+
+/**
+ * 📊 4. Lấy Top N người chơi trong tháng (30 ngày)
+ */
+export function getTopMonthlyPeakPlayers(limit = 5) {
+    return getTopPlayersForPeriod(30, limit);
+}
+
+/**
+ * 🎙️ 5. Tạo chuỗi thông báo Bảng Xếp Hạng Peak PP Top 5 Hàng Ngày chuẩn IRC
  */
 export function formatDailyLeaderboardIRC(limit = 5) {
     const topPlayers = getTopDailyPeakPlayers(limit);
@@ -185,7 +250,7 @@ export function formatDailyLeaderboardIRC(limit = 5) {
         const link = p.userId
             ? `[https://osu.ppy.sh/u/${p.userId} ${cleanName}]`
             : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]`;
-        return `#${rankNum} ${link} (${p.peakPp}pp)`;
+        return `#${rankNum} ${link} (${p.pp}pp)`;
     });
 
     return `YUE: 🏆 Top ${topPlayers.length} Daily Peak PP: ${rankEntries.join(' | ')}`;
