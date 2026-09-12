@@ -39,9 +39,15 @@ function formatLeaderboardSection(players, isCompact = false) {
             return `${medal} ${userLink} — ${ppText}`;
         }
 
-        const starNum = p.starRating ? parseFloat(p.starRating).toFixed(2) : '?.??';
+        const starVal = p.starRating ?? p.star;
+        const starNum = (starVal !== undefined && starVal !== null && !isNaN(starVal) && Number(starVal) > 0) ? Number(starVal).toFixed(2) : null;
         const mapTitleStr = p.mapTitle || 'Unknown Map';
-        const mapInfo = `\n┗ 🎵 *${mapTitleStr}*  \`⭐ ${starNum}★\``;
+        const modsArr = Array.isArray(p.mods) && p.mods.length > 0
+            ? p.mods
+            : (p.mod && p.mod !== 'NM' ? [p.mod] : []);
+        const modsStr = modsArr.length > 0 ? ` **+${modsArr.join('')}**` : '';
+        const starStr = starNum ? `  \`⭐ ${starNum}★\`` : '';
+        const mapInfo = `\n┗ 🎵 *${mapTitleStr}*${modsStr}${starStr}`;
 
         return `${medal} ${userLink} — ${ppText}${mapInfo}`;
     }).join('\n\n');

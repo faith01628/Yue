@@ -27,6 +27,64 @@ function ensureStorageFile() {
     }
 }
 
+const MOD_BITMASKS = [
+    { bit: 1 << 0, code: 'NF' },
+    { bit: 1 << 1, code: 'EZ' },
+    { bit: 1 << 3, code: 'HD' },
+    { bit: 1 << 4, code: 'HR' },
+    { bit: 1 << 5, code: 'SD' },
+    { bit: 1 << 6, code: 'DT' },
+    { bit: 1 << 8, code: 'HT' },
+    { bit: 1 << 9, code: 'NC' },
+    { bit: 1 << 10, code: 'FL' },
+    { bit: 1 << 12, code: 'SO' },
+    { bit: 1 << 14, code: 'PF' }
+];
+
+export function normalizeMods(rawMods) {
+    if (rawMods === undefined || rawMods === null) return [];
+    
+    // Nếu là bitmask number (ví dụ: 64 cho DT, 72 cho HDDT, 16 cho HR)
+    if (typeof rawMods === 'number' || (typeof rawMods === 'string' && /^\d+$/.test(rawMods))) {
+        const num = Number(rawMods);
+        if (num === 0) return [];
+        const result = [];
+        const isNC = (num & (1 << 9)) !== 0;
+        for (const m of MOD_BITMASKS) {
+            if ((num & m.bit) !== 0) {
+                if (m.code === 'DT' && isNC) continue;
+                result.push(m.code);
+            }
+        }
+        return result;
+    }
+
+    // Nếu là mảng (ví dụ: ['HD', 'DT'] hoặc [{ acronym: 'HD' }] hoặc [[ 'DT' ], ['HD']])
+    if (Array.isArray(rawMods)) {
+        const flattened = rawMods.flatMap(m => {
+            if (typeof m === 'string') return [m];
+            if (typeof m === 'number') return normalizeMods(m);
+            if (Array.isArray(m)) return normalizeMods(m);
+            if (typeof m === 'object' && m !== null) {
+                const code = m.acronym || m.mod || m.acronym_code;
+                return code ? [String(code)] : [];
+            }
+            return [];
+        }).filter(Boolean);
+        return Array.from(new Set(flattened));
+    }
+
+    // Nếu là chuỗi "HDDT" hoặc "+HDDT"
+    if (typeof rawMods === 'string') {
+        const clean = rawMods.trim().replace(/^\+/, '');
+        if (clean.toUpperCase() === 'NM' || clean === '') return [];
+        const matched = clean.match(/.{1,2}/g);
+        return matched || [clean];
+    }
+
+    return [];
+}
+
 function loadLeaderboardData() {
     ensureStorageFile();
     try {
@@ -39,13 +97,18 @@ function loadLeaderboardData() {
             const records = [];
             const oldDate = data.date || getTodayDateString();
             for (const [lowerName, p] of Object.entries(data.players)) {
+                const normMods = normalizeMods(p.mods || p.mod);
+                const starVal = p.starRating ?? p.star ?? 0.0;
                 records.push({
                     username: p.username || lowerName,
                     lowerName: lowerName,
                     userId: p.userId || null,
                     pp: p.peakPp || 0,
                     mapTitle: p.mapTitle || '',
-                    starRating: p.starRating || 0,
+                    starRating: parseFloat(Number(starVal).toFixed(2)),
+                    star: parseFloat(Number(starVal).toFixed(2)),
+                    mods: normMods,
+                    mod: normMods.length > 0 ? normMods.join('') : 'NM',
                     timestamp: p.updatedAt || now,
                     date: oldDate
                 });
@@ -55,6 +118,16 @@ function loadLeaderboardData() {
 
         if (!Array.isArray(data.records)) {
             data.records = [];
+        }
+
+        // Chuẩn hóa và làm sạch bản ghi
+        for (const r of data.records) {
+            r.mods = normalizeMods(r.mods || r.mod);
+            r.mod = r.mods.length > 0 ? r.mods.join('') : 'NM';
+            const starVal = r.starRating ?? r.star ?? 0.0;
+            const parsedStar = parseFloat(Number(starVal).toFixed(2));
+            r.starRating = parsedStar;
+            r.star = parsedStar;
         }
 
         // 🧹 TỰ ĐỘNG LỌC VÀ DỌN DẸP DỮ LIỆU CŨ HƠN 30 NGÀY
@@ -101,7 +174,7 @@ export async function recordMatchDailyPeakPP(matchSummary) {
 
     const data = loadLeaderboardData();
     const beatmapId = matchSummary.beatmap?.id;
-    const starRating = matchSummary.beatmap?.starRating || 4.0;
+    const baseStarRating = matchSummary.beatmap?.starRating || 4.0;
     const beatmapTitle = matchSummary.beatmap?.title || 'Unknown Map';
     const today = getTodayDateString();
     const now = Date.now();
@@ -115,14 +188,18 @@ export async function recordMatchDailyPeakPP(matchSummary) {
         // Loại bỏ bot
         if (!cleanName || lowerName.includes('banchobot') || lowerName.includes('yue')) continue;
 
-        // 🛡️ CHỐNG EXPLOIT: Bỏ qua hoàn toàn nếu người chơi FAIL/QUIT (passed === false) hoặc thoát quá sớm (Combo < 15, Score < 30,000)
-        if (scoreObj.passed === false || scoreObj.passed === 0 || (scoreObj.score || 0) < 30000 || (scoreObj.maxcombo || 0) < 15) {
+        // 🛡️ CHỐNG EXPLOIT: Bỏ qua hoàn toàn nếu người chơi FAIL/QUIT (!passed) hoặc thoát quá sớm (Combo < 20, Score < 50,000)
+        if (!scoreObj.passed || scoreObj.passed === 0 || scoreObj.passed === '0' || (scoreObj.score || 0) < 50000 || (scoreObj.maxcombo || 0) < 20) {
             console.log(`[Leaderboard Filter] 🛡️ Bỏ qua play FAILED/QUIT của ${cleanName} (Passed: ${scoreObj.passed}, Score: ${scoreObj.score}, Combo: ${scoreObj.maxcombo})`);
             continue;
         }
 
-        // Tính PP cho play này
+        const modsArray = normalizeMods(scoreObj.mods);
+
+        // Tính PP và Star Rating thực tế sau khi tính Mod bằng rosu-pp
         let calculatedPp = 0;
+        let calculatedStars = baseStarRating;
+
         if (beatmapId) {
             try {
                 const ppRes = await calculateBeatmapPP(beatmapId, {
@@ -132,10 +209,16 @@ export async function recordMatchDailyPeakPP(matchSummary) {
                     n100: scoreObj.statistics?.count_100,
                     n50: scoreObj.statistics?.count_50,
                     n300: scoreObj.statistics?.count_300,
-                    mods: scoreObj.mods || []
+                    mods: modsArray
                 });
-                if (ppRes && ppRes.pp) {
-                    calculatedPp = Math.round(ppRes.pp);
+                if (ppRes) {
+                    if (ppRes.pp) {
+                        calculatedPp = Math.round(ppRes.pp);
+                    }
+                    const starsVal = ppRes.difficulty?.stars ?? ppRes.stars;
+                    if (typeof starsVal === 'number' && !isNaN(starsVal) && starsVal > 0) {
+                        calculatedStars = starsVal;
+                    }
                 }
             } catch (ppErr) {
                 console.error(`[Leaderboard] PP calc fallback for ${cleanName}:`, ppErr.message);
@@ -148,7 +231,7 @@ export async function recordMatchDailyPeakPP(matchSummary) {
             const comboRatio = mapMaxCombo > 0 ? Math.min(1, (scoreObj.maxcombo || 0) / mapMaxCombo) : 0.5;
             const accFactor = Math.pow(scoreObj.accuracy / 100, 3);
             const scoreRatio = (scoreObj.score || 0) / 1000000;
-            calculatedPp = Math.max(1, Math.round(scoreRatio * (starRating * 45) * accFactor * (0.4 + 0.6 * comboRatio)));
+            calculatedPp = Math.max(1, Math.round(scoreRatio * (calculatedStars * 45) * accFactor * (0.4 + 0.6 * comboRatio)));
         }
 
         // Tìm bản ghi cao nhất trong ngày của người chơi này
@@ -157,7 +240,10 @@ export async function recordMatchDailyPeakPP(matchSummary) {
 
         // 🌟 CHỈ CẬP NHẬT NẾU KỶ LỤC MỚI CAO HƠN PEAK PP CŨ TRONG NGÀY
         if (!existingRecord || calculatedPp > existingRecord.pp) {
-            console.log(`[Leaderboard] ⚡ New Peak PP for ${cleanName}: ${calculatedPp}pp (Old: ${existingRecord?.pp || 0}pp) on ${beatmapTitle}`);
+            const modStr = modsArray.length > 0 ? modsArray.join('') : 'NM';
+            const starFloat = parseFloat(calculatedStars.toFixed(2));
+            const modsTag = modsArray.length > 0 ? ` +${modStr}` : '';
+            console.log(`[Leaderboard] ⚡ New Peak PP for ${cleanName}: ${calculatedPp}pp (Old: ${existingRecord?.pp || 0}pp) on ${beatmapTitle} (${starFloat.toFixed(2)}★${modsTag})`);
             
             const newRecord = {
                 username: cleanName,
@@ -165,7 +251,10 @@ export async function recordMatchDailyPeakPP(matchSummary) {
                 userId: scoreObj.userId || existingRecord?.userId || null,
                 pp: calculatedPp,
                 mapTitle: beatmapTitle,
-                starRating: parseFloat(starRating.toFixed(2)),
+                starRating: starFloat,
+                star: starFloat,
+                mods: modsArray,
+                mod: modStr,
                 timestamp: now,
                 date: today
             };
@@ -237,7 +326,7 @@ export function getTopMonthlyPeakPlayers(limit = 5) {
 }
 
 /**
- * 🎙️ 5. Tạo chuỗi thông báo Bảng Xếp Hạng Peak PP Top 5 Hàng Ngày chuẩn IRC
+ * 🎙️ 5. Tạo chuỗi thông báo Bảng Xếp Hạng Peak PP Top 5 Hàng Ngày chuẩn IRC (Gọn gàng trên 1 dòng)
  */
 export function formatDailyLeaderboardIRC(limit = 5) {
     const topPlayers = getTopDailyPeakPlayers(limit);
@@ -250,8 +339,28 @@ export function formatDailyLeaderboardIRC(limit = 5) {
         const link = p.userId
             ? `[https://osu.ppy.sh/u/${p.userId} ${cleanName}]`
             : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]`;
-        return `#${rankNum} ${link} (${p.pp}pp)`;
+        
+        const modsArr = Array.isArray(p.mods) && p.mods.length > 0
+            ? p.mods
+            : (p.mod && p.mod !== 'NM' ? [p.mod] : []);
+        const modsStr = modsArr.length > 0 ? `+${modsArr.join('')}` : '';
+
+        const starVal = p.starRating ?? p.star;
+        const validStar = (starVal !== undefined && starVal !== null && !isNaN(starVal) && Number(starVal) > 0)
+            ? `${Number(starVal).toFixed(2)}★`
+            : '';
+
+        let detailTag = '';
+        if (modsStr && validStar) {
+            detailTag = ` (${modsStr} ${validStar})`;
+        } else if (modsStr) {
+            detailTag = ` (${modsStr})`;
+        } else if (validStar) {
+            detailTag = ` (${validStar})`;
+        }
+
+        return `#${rankNum} ${link} ${p.pp}pp${detailTag}`;
     });
 
-    return `YUE: 🏆 Top ${topPlayers.length} Daily Peak PP: ${rankEntries.join(' | ')}`;
+    return `YUE: 🏆 Top ${topPlayers.length} Daily PP: ${rankEntries.join(' | ')}`;
 }

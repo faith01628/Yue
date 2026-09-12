@@ -350,7 +350,9 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         // 🎯 Build Params chuẩn cho rosu-pp-js
         const perfParams = {};
 
-        if (options.mods) perfParams.mods = options.mods;
+        if (options.mods !== undefined && options.mods !== null) {
+            perfParams.mods = Array.isArray(options.mods) ? options.mods.join('') : options.mods;
+        }
         if (options.misses !== undefined) perfParams.misses = options.misses;
 
         // Nếu truyền n100 và n50

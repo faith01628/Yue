@@ -1,6 +1,7 @@
 import { getMatchDetails, getUserProfile, getBeatmapDetail, getUserRecentPlay } from './osuService.js';
 import { askYue } from '../aiService.js';
 import { botConfig } from '../../config/botConfig.js';
+import { normalizeMods } from './dailyLeaderboardService.js';
 
 
 
@@ -78,8 +79,9 @@ export async function recordRoomMatch(matchId, channelName = null) {
             }
         }
 
-        // Lấy danh sách điểm số (Scores)
+        // Lấy danh sách điểm số (Scores) và Mod phòng / Mod player
         const rawScores = lastGame.scores || [];
+        const gameMods = lastGame.mods !== undefined ? lastGame.mods : (lastGame.enabled_mods !== undefined ? lastGame.enabled_mods : (lastGame.enabledMods || []));
         const processedScores = [];
 
         for (const s of rawScores) {
@@ -104,7 +106,28 @@ export async function recordRoomMatch(matchId, channelName = null) {
 
             const misses = parseInt(s.countmiss ?? s.statistics?.count_miss ?? 0);
             const maxcombo = parseInt(s.maxcombo ?? s.max_combo ?? 0);
-            const passed = s.passed !== undefined ? (s.passed === true || s.passed === 1 || s.passed === '1') : (misses < 50);
+
+            // Xử lý Pass/Fail chuẩn cho cả API v1 (pass: "1"/"0") và API v2 (passed: true/false, rank: "F")
+            let isPassed = false;
+            if (s.passed !== undefined && s.passed !== null) {
+                isPassed = (s.passed === true || s.passed === 1 || s.passed === '1');
+            } else if (s.pass !== undefined && s.pass !== null) {
+                isPassed = (s.pass === true || s.pass === 1 || s.pass === '1');
+            } else if (s.rank !== undefined && s.rank !== null) {
+                isPassed = (String(s.rank).toUpperCase() !== 'F');
+            } else {
+                isPassed = totalScore > 50000;
+            }
+
+            // Nếu s.rank là 'F', chắc chắn là Fail/Quit bất kể trường nào
+            if (s.rank && String(s.rank).toUpperCase() === 'F') {
+                isPassed = false;
+            }
+
+            const passed = isPassed;
+
+            const scoreMods = s.mods !== undefined ? s.mods : (s.enabled_mods !== undefined ? s.enabled_mods : (s.enabledMods || []));
+            const mergedMods = normalizeMods([gameMods, scoreMods]);
 
             processedScores.push({
                 userId,
@@ -114,7 +137,8 @@ export async function recordRoomMatch(matchId, channelName = null) {
                 misses,
                 maxcombo,
                 passed,
-                mods: s.mods || []
+                mods: mergedMods,
+                mod: mergedMods.length > 0 ? mergedMods.join('') : 'NM'
             });
         }
 
@@ -136,7 +160,7 @@ export async function recordRoomMatch(matchId, channelName = null) {
                 title: beatmapInfo?.beatmapset?.title || beatmapInfo?.title || 'Unknown Title',
                 artist: beatmapInfo?.beatmapset?.artist || beatmapInfo?.artist || 'Unknown Artist',
                 version: beatmapInfo?.version || 'Normal',
-                starRating: beatmapInfo?.star_rating || beatmapInfo?.difficultyrating || 4.0,
+                starRating: beatmapInfo?.difficulty_rating || beatmapInfo?.star_rating || beatmapInfo?.difficultyrating || 4.0,
                 maxCombo: beatmapInfo?.max_combo || 0
             },
             scores: processedScores
