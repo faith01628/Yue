@@ -1,9 +1,9 @@
 import { isFeatureOn } from '../../shared/config/botConfig.js';
-import { isFeatureEnabled, setFeatureState, loadFeatureToggles } from '../../shared/config/featureToggles.js';
+import { isFeatureEnabled, setFeatureState } from '../../shared/config/featureToggles.js';
 import { memoryProvider } from '../../../brain/MemoryProvider.js';
 import { handleInfoCommand } from '../../../commands/info.js';
 import { handleSetupCommand } from '../../../commands/setup.js';
-import { handleSetupLeaderboardBoardCommand, handleHistoryLeaderboardCommand } from '../../osu/services/dailyLeaderboardService.js';
+import { handleSetupLeaderboardBoardCommand, handleHistoryLeaderboardCommand } from '../../../services/osu/dailyLeaderboardService.js';
 import { handleDiscordToBanchoSync } from '../../../services/multiChatSyncService.js';
 import { handleAiChatMessage } from './aiChatHandler.js';
 
@@ -20,7 +20,7 @@ import {
     handleOsuStatCommand,
     handlePickMapCommand,
     handleTopMultiCommand
-} from '../../osu/stats/index.js';
+} from '../../../commands/osu/index.js';
 
 export function registerMessageHandler(client) {
     client.on('messageCreate', async (message) => {
@@ -177,26 +177,26 @@ export function registerMessageHandler(client) {
                 return await message.reply("🔴 Tính năng **Osu Multiplayer & 24/7 Room** tạm thời đang TẮT!");
             }
             if (['.mr', '.mr247', '.make247', '.make-room', '.makeroom', '.lobby'].includes(firstWord)) {
-                const { handleMakeRoomCommand } = await import('../../osu/stats/makeRoomCommand.js');
+                const { handleMakeRoomCommand } = await import('../../../commands/osu/makeRoomCommand.js');
                 return await handleMakeRoomCommand(message);
             }
             if (['.inv', '.invite', '.invosu'].includes(firstWord)) {
-                const { handleInviteCommand } = await import('../../osu/stats/inviteCommand.js');
+                const { handleInviteCommand } = await import('../../../commands/osu/inviteCommand.js');
                 return await handleInviteCommand(message);
             }
             if (['.close', '.matchclose', '.mc'].includes(firstWord)) {
-                const { handleCloseMatchCommand } = await import('../../osu/stats/closeMatchCommand.js');
+                const { handleCloseMatchCommand } = await import('../../../commands/osu/closeMatchCommand.js');
                 return await handleCloseMatchCommand(message);
             }
             if (['.joinroom', '!joinroom', '.jr', '!jr', '.jr247', '!jr247', '.join247', '.joinroom247'].includes(firstWord)) {
-                const { handleJoinRoomCommand } = await import('../../osu/stats/joinRoomCommand.js');
+                const { handleJoinRoomCommand } = await import('../../../commands/osu/joinRoomCommand.js');
                 return await handleJoinRoomCommand(message);
             }
             if (['.rooms247', '.list247', '.multi247'].includes(firstWord)) {
                 if (!isFeatureEnabled('community247Rooms')) {
                     return await message.reply("🔴 Tính năng **Phòng 24/7 (Community 24/7 Rooms)** hiện đang TẮT trên instance này!");
                 }
-                const { loadMulti247Rooms } = await import('../../osu/multi247/room247Manager.js');
+                const { loadMulti247Rooms } = await import('../../../services/multi247/room247Manager.js');
                 const rooms = loadMulti247Rooms();
                 const roomList = Object.values(rooms);
                 if (roomList.length === 0) {

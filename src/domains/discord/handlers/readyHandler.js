@@ -14,7 +14,7 @@ export function registerReadyHandler(client) {
         } catch (e) {}
 
         try {
-            const { setDiscordClientForLeaderboard, startDailyLeaderboardResetLoop } = await import('../../osu/services/dailyLeaderboardService.js');
+            const { setDiscordClientForLeaderboard, startDailyLeaderboardResetLoop } = await import('../../../services/osu/dailyLeaderboardService.js');
             setDiscordClientForLeaderboard(client);
             startDailyLeaderboardResetLoop(client);
         } catch (e) {}
@@ -38,9 +38,9 @@ export function registerReadyHandler(client) {
 
         if (isFeatureEnabled('multiOsu')) {
             try {
-                const { setDiscordClient } = await import('../../osu/multi247/room247Manager.js');
+                const { setDiscordClient } = await import('../../../services/multi247/room247Manager.js');
                 setDiscordClient(client);
-                const { initBancho } = await import('../../osu/services/banchoService.js');
+                const { initBancho } = await import('../../../services/osu/banchoService.js');
                 await initBancho();
             } catch (bErr) {
                 console.error('❌ Lỗi tự động khởi tạo Bancho IRC:', bErr.message);

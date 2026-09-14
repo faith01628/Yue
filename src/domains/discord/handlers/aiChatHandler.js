@@ -5,7 +5,7 @@ import { saveMessageToLocalHistory, saveYueReplyToLocalHistory, getConsecutiveGi
 import { checkAntiSpam } from '../../../services/antiSpamService.js';
 import { buildContext } from '../../../brain/contextBuilder.js';
 import { memoryProvider } from '../../../brain/MemoryProvider.js';
-import { handleNaturalLanguageMapRequest } from '../../osu/stats/recommendMapCommand.js';
+import { handleNaturalLanguageMapRequest } from '../../../commands/osu/recommendMapCommand.js';
 
 export async function handleAiChatMessage(client, message) {
     const isMentioned = message.mentions.has(client.user);

@@ -1,5 +1,5 @@
 import { isFeatureOn } from '../../shared/config/botConfig.js';
-import { handleOsuLinkSlashCommand } from '../../osu/stats/linkCommand.js';
+import { handleOsuLinkSlashCommand } from '../../../commands/osu/linkCommand.js';
 
 export function registerInteractionHandler(client) {
     client.on('interactionCreate', async (interaction) => {
