@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { safeReadJSON, safeWriteJSON } from '../utils/safeStorage.js';
 
 const DB_PATH = path.resolve('data/yueMemory.json');
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -10,21 +11,15 @@ export class MemoryProvider {
     }
 
     _initDB() {
-        const dir = path.dirname(DB_PATH);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}, null, 2));
+        safeReadJSON(DB_PATH, {});
     }
 
     _read() {
-        try {
-            return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-        } catch {
-            return {};
-        }
+        return safeReadJSON(DB_PATH, {});
     }
 
     _write(data) {
-        fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+        safeWriteJSON(DB_PATH, data);
     }
 
     // 🧹 TỰ ĐỘNG DỌN RÁC THEO TẦNG KÝ ỨC (GARBAGE COLLECTION)

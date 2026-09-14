@@ -97,6 +97,11 @@ export const MESSAGES = {
             "YUE HELP (2/4) - HOST: .host <user> | .ah (On) | .ahoff (Off) | .next / .skip (Đổi host) | .q (Hàng đợi)",
             "YUE HELP (3/4) - PLAYER & REF: .rs [user] (Recent score) | .addref <user> | .rmref <user> | .refs",
             "YUE HELP (4/4) - AI AGENT: .yue <câu hỏi> (Trò chuyện hoặc ra lệnh bằng ngôn ngữ tự nhiên)"
+        ],
+        helpLines247: [
+            "YUE HELP 24/7 (1/3) - MAP: .rnd [sao] [phút] [status] | .a [user] (Duyệt) | .dl (Link) | .abort | .time <s giây>",
+            "YUE HELP 24/7 (2/3) - HOST & PLAYER: .host <user> | .next / .skip (Đổi host) | .q (Hàng đợi) | .rs [user]",
+            "YUE HELP 24/7 (3/3) - AI AGENT: .yue <câu hỏi> (Trò chuyện hoặc ra lệnh bằng ngôn ngữ tự nhiên)"
         ]
     },
     en: {
@@ -142,6 +147,11 @@ export const MESSAGES = {
             "YUE HELP (2/4) - HOST: .host <user> | .ah (On) | .ahoff (Off) | .next / .skip | .q (Queue)",
             "YUE HELP (3/4) - PLAYER & REF: .rs [user] (Recent score) | .addref <user> | .rmref <user> | .refs",
             "YUE HELP (4/4) - AI AGENT: .yue <question> (Chat or command in natural language)"
+        ],
+        helpLines247: [
+            "YUE HELP 24/7 (1/3) - MAP: .rnd [stars] [mins] [status] | .a [user] | .dl (Link) | .abort | .time <sec>",
+            "YUE HELP 24/7 (2/3) - HOST & PLAYER: .host <user> | .next / .skip | .q (Queue) | .rs [user]",
+            "YUE HELP 24/7 (3/3) - AI AGENT: .yue <question> (Chat or command in natural language)"
         ]
     }
 };

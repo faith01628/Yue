@@ -1,34 +1,19 @@
 import fs from 'fs';
 import path from 'path';
+import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 
 const MEMORY_FILE = path.resolve('data/multi247Memory.json');
 
 function ensureMemoryFile() {
-    const dir = path.dirname(MEMORY_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(MEMORY_FILE)) fs.writeFileSync(MEMORY_FILE, JSON.stringify({}), 'utf-8');
+    safeReadJSON(MEMORY_FILE, {});
 }
 
 function loadMemoryData() {
-    ensureMemoryFile();
-    try {
-        const data = fs.readFileSync(MEMORY_FILE, 'utf-8');
-        return JSON.parse(data);
-    } catch (err) {
-        console.error('❌ Lỗi đọc file multi247Memory.json:', err.message);
-        return {};
-    }
+    return safeReadJSON(MEMORY_FILE, {});
 }
 
 function saveMemoryData(data) {
-    ensureMemoryFile();
-    try {
-        fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf-8');
-        return true;
-    } catch (err) {
-        console.error('❌ Lỗi ghi file multi247Memory.json:', err.message);
-        return false;
-    }
+    return safeWriteJSON(MEMORY_FILE, data);
 }
 
 /**

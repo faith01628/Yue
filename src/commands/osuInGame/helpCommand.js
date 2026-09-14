@@ -1,8 +1,13 @@
 import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
+import { is247CommunityRoom } from '../../services/multi247/room247Manager.js';
 
 export async function handleInGameHelp(channel) {
+    const channelName = channel?.name || '';
+    const matchId = channelName.replace('#mp_', '');
+    const is247 = is247CommunityRoom(matchId);
+
     const roomLang = await getRoomLanguage(channel);
-    const helpLines = t('helpLines', roomLang);
+    const helpLines = t(is247 ? 'helpLines247' : 'helpLines', roomLang);
 
     for (let i = 0; i < helpLines.length; i++) {
         await channel.sendMessage(helpLines[i]);

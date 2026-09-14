@@ -1,34 +1,19 @@
 import fs from 'fs';
 import path from 'path';
+import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 
 const ROOMS_FILE = path.resolve('data/multi247Rooms.json');
 
 function ensureRoomsFile() {
-    const dir = path.dirname(ROOMS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(ROOMS_FILE)) fs.writeFileSync(ROOMS_FILE, JSON.stringify({}), 'utf-8');
+    safeReadJSON(ROOMS_FILE, {});
 }
 
 export function loadMulti247Rooms() {
-    ensureRoomsFile();
-    try {
-        const data = fs.readFileSync(ROOMS_FILE, 'utf-8');
-        return JSON.parse(data);
-    } catch (err) {
-        console.error('❌ Lỗi đọc file multi247Rooms.json:', err.message);
-        return {};
-    }
+    return safeReadJSON(ROOMS_FILE, {});
 }
 
 export function saveMulti247Rooms(rooms) {
-    ensureRoomsFile();
-    try {
-        fs.writeFileSync(ROOMS_FILE, JSON.stringify(rooms, null, 2), 'utf-8');
-        return true;
-    } catch (err) {
-        console.error('❌ Lỗi ghi file multi247Rooms.json:', err.message);
-        return false;
-    }
+    return safeWriteJSON(ROOMS_FILE, rooms);
 }
 
 /**
@@ -69,6 +54,7 @@ export function register247Room(matchId, roomData = {}) {
         updatedAt: Date.now()
     };
 
+    touch247RoomActivity(key);
     saveMulti247Rooms(rooms);
     return rooms[key];
 }
@@ -120,6 +106,7 @@ export async function reset247RoomLobbyDefaults(channel) {
 let keepAliveTimer = null;
 let discordClientInstance = null;
 const roomLastActivityMap = new Map();
+const isRecreatingSet = new Set();
 
 /**
  * Lưu instance của Discord Client để thực hiện sửa tin nhắn Embed
@@ -143,46 +130,81 @@ export function touch247RoomActivity(matchId) {
  */
 export async function recreate247Room(oldMatchId, banchoClient) {
     const oldKey = String(oldMatchId);
+    if (isRecreatingSet.has(oldKey)) {
+        console.log(`[24/7 Auto-Recreate] ⏳ Phòng ${oldKey} đang trong quá trình tái tạo, bỏ qua request trùng lặp.`);
+        return null;
+    }
+
     const roomConfig = get247RoomConfig(oldKey);
     if (!roomConfig) return null;
 
-    console.log(`[24/7 Auto-Recreate] 🔄 Đang tự động tái tạo phòng 24/7 cũ (Match ID: ${oldKey})...`);
-
-    // 1. Đóng channel cũ nếu còn mở trên Bancho IRC
+    isRecreatingSet.add(oldKey);
     try {
-        const oldChannel = banchoClient?.getChannel(`#mp_${oldKey}`);
-        if (oldChannel) {
-            await oldChannel.sendMessage('YUE: Room has been idle for 20 minutes. Auto-closing & recreating a new room!');
-            await oldChannel.sendMessage('!mp close');
+        console.log(`[24/7 Auto-Recreate] 🔄 Đang tự động tái tạo phòng 24/7 cũ (Match ID: ${oldKey})...`);
+
+        // 1. Kiểm tra & Đảm bảo kết nối Bancho IRC
+        let client = banchoClient;
+        if (!client || typeof client.isConnected !== 'function' || !client.isConnected()) {
+            try {
+                const { initBancho } = await import('../osu/banchoService.js');
+                client = await initBancho();
+            } catch (e) {
+                console.error('[24/7 Auto-Recreate] Không thể khởi tạo/kết nối lại Bancho IRC:', e.message);
+            }
         }
-    } catch (e) {
-        console.warn(`[24/7 Auto-Recreate] Đóng phòng cũ ${oldKey} không thành công (có thể đã bị Bancho đóng):`, e.message);
-    }
 
-    // Dọn dẹp timestamp cũ & trạng thái phòng cũ trong Map!
-    roomLastActivityMap.delete(oldKey);
-    try {
-        const { resetRoomHostState } = await import('../../commands/osuInGame/hostCommands.js');
-        resetRoomHostState(`#mp_${oldKey}`);
-    } catch (e) {}
+        if (!client || typeof client.isConnected !== 'function' || !client.isConnected()) {
+            console.error('[24/7 Auto-Recreate Error]: Bancho IRC hiện tại đang mất kết nối! Giữ lại config DB để tự động thử lại ở chu kỳ sau.');
+            return null;
+        }
 
-    // 2. Dọn dẹp phòng cũ khỏi DB
-    unregister247Room(oldKey);
+        // 2. Đóng channel cũ nếu còn mở trên Bancho IRC
+        try {
+            const oldChannel = client.getChannel(`#mp_${oldKey}`);
+            if (oldChannel) {
+                await oldChannel.sendMessage('YUE: Room has been idle for 20 minutes. Auto-closing & recreating a new room!');
+                await oldChannel.sendMessage('!mp close');
+            }
+        } catch (e) {
+            console.warn(`[24/7 Auto-Recreate] Đóng phòng cũ ${oldKey} không thành công (có thể đã bị Bancho đóng):`, e.message);
+        }
 
-    // 3. Tạo phòng mới trên Bancho
-    try {
+        // Dọn dẹp timestamp cũ & trạng thái phòng cũ trong Map
+        roomLastActivityMap.delete(oldKey);
+        try {
+            const { resetRoomHostState } = await import('../../commands/osuInGame/hostCommands.js');
+            resetRoomHostState(`#mp_${oldKey}`);
+        } catch (e) { }
+
+        // 3. Tạo phòng mới trên Bancho IRC (THỰC HIỆN TRƯỚC KHI XÓA DB CŨ)
         const roomName = roomConfig.roomName || "Yue's 24/7 Community Room";
-        const newChannel = await banchoClient.createLobby(roomName);
+        const newChannel = await client.createLobby(roomName);
         const newLobby = newChannel.lobby;
         const newMatchId = String(newLobby.id);
 
-        // Đặt timestamp hoạt động phòng mới ngay khi tạo
+        // Đặt timestamp hoạt động phòng mới ngay khi tạo thành công trên Bancho
+        touch247RoomActivity(newMatchId);
+
+        // 4. Khi lobby mới đã tạo thành công -> Tiến hành tráo đổi DB cũ sang DB mới (Atomic swap để tránh ghi rỗng disk)
+        const rooms = loadMulti247Rooms();
+        delete rooms[oldKey];
+        rooms[newMatchId] = {
+            ...roomConfig,
+            matchId: newMatchId,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+        saveMulti247Rooms(rooms);
         touch247RoomActivity(newMatchId);
 
         // Đặt cấu hình mặc định
-        await newChannel.sendMessage('!mp password');
-        await newChannel.sendMessage('!mp set 0 0');
-        await newChannel.sendMessage('!mp mods FreeMod');
+        try {
+            await newChannel.sendMessage('!mp password');
+            await newChannel.sendMessage('!mp set 0 0');
+            await newChannel.sendMessage('!mp mods FreeMod');
+        } catch (setErr) {
+            console.warn('[24/7 Auto-Recreate] Lỗi cài đặt mặc định phòng:', setErr.message);
+        }
 
         // Áp dụng Star Limit nếu đã từng cài đặt
         if (roomConfig.starMin !== undefined && roomConfig.starMax !== undefined) {
@@ -196,7 +218,7 @@ export async function recreate247Room(oldMatchId, banchoClient) {
         // Bật Autohost
         try {
             const { enableAutohostForChannel } = await import('../../commands/osuInGame/hostCommands.js');
-            enableAutohostForChannel(newChannel);
+            await enableAutohostForChannel(newChannel);
         } catch (ahErr) {
             console.warn('[24/7 Auto-Recreate] Lỗi bật Autohost:', ahErr.message);
         }
@@ -213,13 +235,7 @@ export async function recreate247Room(oldMatchId, banchoClient) {
             }
         }
 
-        // 4. Lưu thông tin phòng mới vào DB & activeLobbies
-        register247Room(newMatchId, {
-            ...roomConfig,
-            matchId: newMatchId,
-            createdAt: Date.now()
-        });
-
+        // 5. Lưu thông tin phòng mới vào activeLobbies
         try {
             const { activeLobbies } = await import('../osu/banchoService.js');
             activeLobbies.delete(oldKey);
@@ -238,13 +254,15 @@ export async function recreate247Room(oldMatchId, banchoClient) {
 
         console.log(`✅ [24/7 Auto-Recreate] Tạo thành công phòng 24/7 mới! Match ID: ${newMatchId}`);
 
-        // 5. Tự động tìm & Cập nhật Embed tin nhắn Discord với Match ID mới
+        // 6. Tự động tìm & Cập nhật Embed tin nhắn Discord với Match ID mới
         await findAndUpdate247DiscordEmbed(roomConfig, newMatchId, inviteStatusText);
 
         return newMatchId;
     } catch (err) {
         console.error('[24/7 Auto-Recreate Error]:', err.message);
         return null;
+    } finally {
+        isRecreatingSet.delete(oldKey);
     }
 }
 
@@ -430,12 +448,24 @@ export function start247KeepAliveLoop(banchoClient) {
 
     keepAliveTimer = setInterval(async () => {
         try {
+            let client = banchoClient;
+            if (!client || typeof client.isConnected !== 'function' || !client.isConnected()) {
+                try {
+                    const { initBancho } = await import('../osu/banchoService.js');
+                    client = await initBancho();
+                } catch (e) { }
+            }
+
+            if (!client || typeof client.isConnected !== 'function' || !client.isConnected()) {
+                return; // Mất kết nối Bancho, bỏ qua lượt này để 1 phút sau tự retry
+            }
+
             const rooms = loadMulti247Rooms();
             const now = Date.now();
 
             for (const matchId of Object.keys(rooms)) {
                 const channelName = `#mp_${matchId}`;
-                const channel = banchoClient?.getChannel(channelName);
+                const channel = client.getChannel(channelName);
                 if (!channel) continue;
 
                 // 1. Kiểm tra số lượng người chơi thực tế trong lobby
@@ -454,13 +484,16 @@ export function start247KeepAliveLoop(banchoClient) {
                 }
 
                 // 3. Nếu phòng TRỐNG NGƯỜI (0 players) -> Tính thời gian phòng bị bỏ trống
+                if (!roomLastActivityMap.has(String(matchId))) {
+                    roomLastActivityMap.set(String(matchId), now);
+                }
                 const lastActivity = roomLastActivityMap.get(String(matchId)) || now;
                 const idleMinutes = (now - lastActivity) / (60 * 1000);
 
                 // 4. Nếu phòng trống ĐỦ 20 PHÚT trở lên -> Tự động đóng & tái tạo phòng mới!
                 if (idleMinutes >= 20) {
                     console.log(`[24/7 Auto-Recreate] 🔄 Phòng ${channelName} vắng người >= 20 phút. Tiến hành tự đóng & tạo phòng 24/7 mới...`);
-                    await recreate247Room(matchId, banchoClient);
+                    await recreate247Room(matchId, client);
                 }
             }
         } catch (err) {
@@ -548,7 +581,7 @@ export function processVoteChoice(channelName, username, isYes) {
     if (!voteObj) return null;
 
     voteObj.votes.set(username.toLowerCase(), isYes);
-    
+
     // Đếm số phiếu đồng ý
     let yesCount = 0;
     for (const [_, val] of voteObj.votes.entries()) {

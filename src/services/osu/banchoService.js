@@ -31,6 +31,16 @@ const bancho = new BanchoClient({
     apiKey: process.env.OSU_API_KEY
 });
 
+// 🛡️ Đăng ký listener bắt lỗi toàn cục cho Bancho client ngay từ đầu
+// Tránh lỗi DNS resolution (getaddrinfo EAI_AGAIN osu.ppy.sh / irc.ppy.sh) làm bùng phát Uncaught Exception
+bancho.on('error', (err) => {
+    console.error('❌ [Bancho IRC Error]:', err?.message || err);
+    if (bancho && typeof bancho.isConnected === 'function' && !bancho.isConnected()) {
+        isConnected = false;
+        connectPromise = null;
+    }
+});
+
 let isConnected = false;
 let connectPromise = null;
 let isListenersAttached = false;
@@ -52,7 +62,7 @@ function getCurrentHostName(channel) {
         if (hostSlot && hostSlot.user?.username) {
             return hostSlot.user.username;
         }
-    } catch (e) {}
+    } catch (e) { }
     return null;
 }
 
@@ -241,7 +251,7 @@ export async function forceJoinLobby(matchId, retries = 3) {
                 if (isNoSuchChannel) {
                     if (is247CommunityRoom(matchId)) {
                         console.log(`🔄 [Bancho IRC] Phòng 24/7 ${matchId} đã bị Bancho tự đóng. Tiến hành tự động tái tạo phòng 24/7 mới...`);
-                        recreate247Room(matchId, bancho);
+                        recreate247Room(matchId, bancho).catch(e => console.error('[recreate247Room Async Error]:', e.message));
                     } else {
                         unregister247Room(matchId);
                         console.log(`ℹ️ [Bancho IRC] Đã tự động dọn dẹp phòng ${matchId} khỏi DB vì phòng đã thực sự bị xóa trên Bancho.`);
@@ -265,7 +275,13 @@ export async function initBancho() {
         console.log('⚡ [Master Control Panel] Tính năng Osu Multiplayer & Bancho IRC đang TẮT (Hoặc cả Normal & 247 đều tắt)!');
         return null;
     }
-    if (isConnected) return bancho;
+    if (isConnected && bancho && typeof bancho.isConnected === 'function' && bancho.isConnected()) {
+        return bancho;
+    }
+    if (bancho && typeof bancho.isConnected === 'function' && !bancho.isConnected()) {
+        isConnected = false;
+        connectPromise = null;
+    }
     if (connectPromise) return connectPromise;
 
     connectPromise = (async () => {
@@ -278,8 +294,15 @@ export async function initBancho() {
                 isListenersAttached = true;
                 bancho.removeAllListeners('PM');
                 bancho.removeAllListeners('CM');
+                bancho.removeAllListeners('disconnected');
+
                 bancho.on('PM', handleInGameChat);
                 bancho.on('CM', handleInGameChat);
+                bancho.on('disconnected', (err) => {
+                    console.warn('⚠️ [Bancho IRC] Đã ngắt kết nối khỏi Bancho IRC:', err?.message || 'Disconnected');
+                    isConnected = false;
+                    connectPromise = null;
+                });
             }
 
             // Khôi phục phòng 24/7 từ storage CHỈ KHI tính năng community247Rooms được BẬT
@@ -310,6 +333,7 @@ export async function initBancho() {
 
             return bancho;
         } catch (err) {
+            isConnected = false;
             connectPromise = null;
             console.error('❌ Lỗi kết nối Bancho IRC:', err.message || err);
             return bancho;
@@ -425,12 +449,24 @@ async function handleInGameChat(message) {
         touch247RoomActivity(matchId);
 
         // Tự động ghi nhận người chơi thực tế vào hàng đợi Autohost khi họ trò chuyện
-        if (senderUsername.toLowerCase() !== 'banchobot' && !senderUsername.toLowerCase().includes('yue')) {
+        const botIrcUser = (process.env.BANCHO_IRC_USERNAME || '').toLowerCase().replace(/^\[|\]$/g, '');
+        const senderLower = senderUsername.toLowerCase().replace(/^\[|\]$/g, '');
+        const isBotUser = senderLower === 'banchobot' || (botIrcUser && senderLower === botIrcUser);
+
+        if (!isBotUser) {
             if (is247CommunityRoom(matchId) && !isAutohostOn(channelName)) {
                 enableAutohostForChannel(channel);
             }
             if (isAutohostOn(channelName)) {
                 addPlayerToQueueSilently(channelName, senderUsername);
+            }
+
+            // 💬 Đồng bộ chat từ Bancho IRC sang Discord
+            try {
+                const { forwardBanchoChatToDiscord } = await import('../multiChatSyncService.js');
+                await forwardBanchoChatToDiscord(channelName, senderUsername, content);
+            } catch (syncErr) {
+                console.error('❌ Lỗi gọi forwardBanchoChatToDiscord:', syncErr.message);
             }
         }
 
@@ -478,7 +514,7 @@ async function handleInGameChat(message) {
             if (lowerContent.includes('the match has finished')) {
                 const matchId = channelName.replace('#mp_', '');
                 clearAfkHostTimer(channelName);
-                
+
                 // 🎯 TỰ ĐỘNG GHI NHỚ TRẬN ĐẤU VỪA HOÀN THÀNH VÀO BỘ NHỚ RAM & BÌNH LUẬN TRẬN ĐẤU & BẢNG XẾP HẠNG NGÀY
                 setTimeout(async () => {
                     try {
@@ -548,7 +584,7 @@ async function handleInGameChat(message) {
         }
 
         const firstWord = content.split(/ +/)[0].toLowerCase();
-        
+
         // 🎯 Lệnh đánh giá trận đấu trực tiếp
         if (['.match', '!match', '.danhgia', '!danhgia', '.review', '!review'].includes(firstWord)) {
             const now = Date.now();

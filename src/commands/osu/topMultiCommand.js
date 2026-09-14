@@ -5,7 +5,7 @@ import {
     getTopMonthlyPeakPlayers 
 } from '../../services/osu/dailyLeaderboardService.js';
 
-const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 function formatUserLink(username, userId) {
     if (!username) return '**Player**';
@@ -57,10 +57,6 @@ function formatLeaderboardSection(players, isCompact = false) {
  * Tạo Embed Bảng Xếp Hạng theo mode được chọn
  */
 function createTopMultiEmbed(activeMode = 'all', botAvatar = null) {
-    const dailyTop = getTopDailyPeakPlayers(5);
-    const weeklyTop = getTopWeeklyPeakPlayers(5);
-    const monthlyTop = getTopMonthlyPeakPlayers(5);
-
     const embed = new EmbedBuilder()
         .setColor('#FF66AA')
         .setAuthor({ 
@@ -71,35 +67,42 @@ function createTopMultiEmbed(activeMode = 'all', botAvatar = null) {
         .setTimestamp();
 
     if (activeMode === 'today') {
-        embed.setTitle('🌅 BẢNG XẾP HẠNG PEAK PP — HÔM NAY')
-            .setDescription('📊 *Peak PP cao nhất của người chơi trong các phòng 24/7 hôm nay (Reset lúc 0:00 AM)*\n\n' + formatLeaderboardSection(dailyTop, false));
+        const dailyTop10 = getTopDailyPeakPlayers(10);
+        embed.setTitle('🌅 BẢNG XẾP HẠNG TOP 10 PEAK PP — HÔM NAY')
+            .setDescription('📊 *Peak PP cao nhất của người chơi trong các phòng 24/7 hôm nay (Reset lúc 0:00 AM)*\n\n' + formatLeaderboardSection(dailyTop10, false));
 
     } else if (activeMode === 'weekly') {
-        embed.setTitle('📅 BẢNG XẾP HẠNG PEAK PP — 7 NGÀY GẦN NHẤT')
-            .setDescription('📊 *Peak PP cao nhất của người chơi trong 7 ngày qua*\n\n' + formatLeaderboardSection(weeklyTop, false));
+        const weeklyTop10 = getTopWeeklyPeakPlayers(10);
+        embed.setTitle('📅 BẢNG XẾP HẠNG TOP 10 PEAK PP — 7 NGÀY GẦN NHẤT')
+            .setDescription('📊 *Peak PP cao nhất của người chơi trong 7 ngày qua*\n\n' + formatLeaderboardSection(weeklyTop10, false));
 
     } else if (activeMode === 'monthly') {
-        embed.setTitle('🗓️ BẢNG XẾP HẠNG PEAK PP — 30 NGÀY GẦN NHẤT')
-            .setDescription('📊 *Peak PP cao nhất của người chơi trong 30 ngày qua*\n\n' + formatLeaderboardSection(monthlyTop, false));
+        const monthlyTop10 = getTopMonthlyPeakPlayers(10);
+        embed.setTitle('🗓️ BẢNG XẾP HẠNG TOP 10 PEAK PP — 30 NGÀY GẦN NHẤT')
+            .setDescription('📊 *Peak PP cao nhất của người chơi trong 30 ngày qua*\n\n' + formatLeaderboardSection(monthlyTop10, false));
 
     } else {
-        // Mode 'all': Tổng hợp gọn gàng cả 3 hạng mục
+        // Mode 'all': Tổng hợp gọn gàng cả 3 hạng mục (Top 5 mỗi mục)
+        const dailyTop5 = getTopDailyPeakPlayers(5);
+        const weeklyTop5 = getTopWeeklyPeakPlayers(5);
+        const monthlyTop5 = getTopMonthlyPeakPlayers(5);
+
         embed.setTitle('🏆 BẢNG XẾP HẠNG TOP MULTIPLAYER (PEAK PP)')
-            .setDescription('📊 *Bảng tổng hợp Peak PP của người chơi tại các phòng Cộng Đồng 24/7 của Yue AI.*\n*Bấm các nút bên dưới để chuyển xem chi tiết từng hạng mục!*')
+            .setDescription('📊 *Bảng tổng hợp Peak PP của người chơi tại các phòng Cộng Đồng 24/7 của Yue AI.*\n*Bấm các nút bên dưới để chuyển xem chi tiết Top 10 từng hạng mục!*')
             .addFields(
                 {
                     name: '🌅 Top 5 Hàng Ngày (Reset 0:00 AM)',
-                    value: formatLeaderboardSection(dailyTop, true),
+                    value: formatLeaderboardSection(dailyTop5, true),
                     inline: false
                 },
                 {
                     name: '📅 Top 5 Hàng Tuần (7 Ngày Qua)',
-                    value: formatLeaderboardSection(weeklyTop, true),
+                    value: formatLeaderboardSection(weeklyTop5, true),
                     inline: false
                 },
                 {
                     name: '🗓️ Top 5 Hàng Tháng (30 Ngày Qua)',
-                    value: formatLeaderboardSection(monthlyTop, true),
+                    value: formatLeaderboardSection(monthlyTop5, true),
                     inline: false
                 }
             );

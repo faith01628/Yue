@@ -183,8 +183,12 @@ export function syncLobbyPlayersToQueue(channel) {
         .filter(name => !name.toLowerCase().includes('banchobot') && !name.toLowerCase().includes('yue'));
 
     if (currentPlayers.length === 0) {
-        setRoomEmptyStatus(channelName, true);
-        queue.length = 0;
+        // Chỉ dọn dẹp hàng đợi nếu slots đã có dữ liệu thực tế (slots.length > 0) hoặc hàng đợi đã rỗng sẵn.
+        // Tránh tình trạng Bancho chưa kịp trả về slots mà vừa có player join khiến queue bị xoá nhầm.
+        if (slots.length > 0 || queue.length === 0) {
+            setRoomEmptyStatus(channelName, true);
+            queue.length = 0;
+        }
         return;
     }
 
@@ -370,10 +374,19 @@ export async function handlePlayerJoin(channel, username) {
     }
 
     const cleanQueue = getQueue(channelName);
+    if (!cleanQueue.some(p => p.toLowerCase() === lowerUser)) {
+        if (wasEmpty) {
+            cleanQueue.unshift(cleanUser);
+        } else {
+            cleanQueue.push(cleanUser);
+        }
+    }
 
-    if (wasEmpty || cleanQueue.length === 1) {
+    const targetHost = (wasEmpty || cleanQueue.length === 1) ? cleanUser : cleanQueue[0];
+
+    if ((wasEmpty || cleanQueue.length === 1 || isRoomEmpty(channelName)) && targetHost) {
         setRoomEmptyStatus(channelName, false);
-        await setHostSafely(chanObj || channel, cleanQueue[0], true);
+        await setHostSafely(chanObj || channel, targetHost, true);
     }
 }
 
