@@ -4,7 +4,11 @@ import { PermissionFlagsBits } from 'discord.js';
 import { 
     saveBoardConfig, 
     loadBoardConfig, 
-    postDailyTop10ToDiscord
+    postDailyTop10ToDiscord,
+    getLeaderboardChannelIds,
+    addLeaderboardChannel,
+    removeLeaderboardChannel,
+    getVNTimeInfo
 } from '../../services/osu/dailyLeaderboardService.js';
 
 const HISTORY_DIR = path.resolve('data/history');
@@ -33,26 +37,52 @@ export async function handleSetupLeaderboardBoardCommand(message, args = []) {
 
     try {
         const subCommand = (args[0] || '').toLowerCase().trim();
-        const config = loadBoardConfig();
         const cmdName = message.content.trim().split(/ +/)[0].toLowerCase();
 
-        // 1. NẾU LÀ HỦY ĐĂNG KÝ (off / disable / unset / remove / delete) HOẶC DÙNG LỆNH .unsetlb
+        // 1. HIỂN THỊ DANH SÁCH KÊNH ĐANG ĐĂNG KÝ (list / show / info)
+        if (['list', 'show', 'info'].includes(subCommand)) {
+            const channels = getLeaderboardChannelIds();
+            const vnTime = getVNTimeInfo();
+            if (channels.length === 0) {
+                return message.reply(`ℹ️ Hiện tại chưa có kênh nào đăng ký nhận thông báo Bảng Xếp Hạng Top 10.\n🕒 **Múi giờ hệ thống:** \`${vnTime.fullStr}\``);
+            }
+            const listStr = channels.map(id => `<#${id}>`).join(', ');
+            return message.reply(`📋 **Danh sách kênh nhận thông báo Bảng Xếp Hạng Hàng Ngày (${channels.length}):**\n${listStr}\n🕒 **Múi giờ hệ thống:** \`${vnTime.fullStr}\``);
+        }
+
+        // 2. NẾU LÀ HỦY ĐĂNG KÝ (off / disable / unset / remove / delete) HOẶC DÙNG LỆNH .unsetlb
         if (['off', 'disable', 'unset', 'remove', 'delete', 'cancel'].includes(subCommand) || cmdName.includes('unset') || cmdName.includes('remove')) {
-            config.channelId = null;
-            saveBoardConfig(config);
-            return message.reply(`🔕 **Đã hủy đăng ký Kênh Bảng Xếp Hạng!**\n👉 Yue sẽ dừng tự động gửi thông báo Top 10 lúc 00:00 đêm cho đến khi bạn cài đặt lại.`);
+            const target = (args[1] || '').toLowerCase().trim();
+            if (target === 'all' || subCommand === 'all') {
+                removeLeaderboardChannel('all');
+                return message.reply('🔕 **Đã hủy đăng ký TẤT CẢ các Kênh Bảng Xếp Hạng!**');
+            }
+
+            const updated = removeLeaderboardChannel(message.channel.id);
+            return message.reply(`🔕 **Đã hủy đăng ký kênh <#${message.channel.id}> khỏi danh sách Bảng Xếp Hạng!**\n👉 Còn lại ${updated.length} kênh đang nhận thông báo.`);
         }
 
-        // 2. CHUYỂN KÊNH HOẶC ĐĂNG KÝ KÊNH MỚI
-        const oldChannelId = config.channelId;
-        config.channelId = message.channel.id;
-        saveBoardConfig(config);
-
-        if (oldChannelId && oldChannelId !== message.channel.id) {
-            return message.reply(`🔄 **Đã chuyển Kênh Bảng Xếp Hạng Hàng Ngày từ <#${oldChannelId}> sang <#${message.channel.id}>!**\n👉 Đúng **00:00 đêm** mỗi khi reset ngày, Yue sẽ chuyển sang tự động gửi bài Embed Top 10 vào kênh mới này.`);
+        // 3. NẾU LÀ THỬ GỬI THÔNG BÁO (test / send / now)
+        if (['test', 'send', 'now'].includes(subCommand)) {
+            addLeaderboardChannel(message.channel.id);
+            const vnTime = getVNTimeInfo();
+            await postDailyTop10ToDiscord(message.client, args[1] || null, message.channel.id);
+            return message.reply(`🧪 **Đã kích hoạt gửi thử Bảng Xếp Hạng Top 10!** Đã gửi tới kênh <#${message.channel.id}>.\n🕒 **Thời gian gửi (VN Time):** \`${vnTime.fullStr}\``);
         }
 
-        return message.reply(`✅ **Đã cài đặt thành công Kênh Bảng Xếp Hạng Hàng Ngày tại <#${message.channel.id}>!**\n👉 Đúng **00:00 đêm** mỗi khi reset ngày, Yue sẽ tự động gửi 1 bài Embed thông báo **Top 10 Peak PP** của ngày vừa kết thúc vào kênh này.`);
+        // 4. ĐĂNG KÝ KÊNH HIỆN TẠI VÀO DANH SÁCH MULTI-CHANNEL
+        const currentChannels = getLeaderboardChannelIds();
+        const isAlreadyAdded = currentChannels.includes(message.channel.id);
+
+        const updatedChannels = addLeaderboardChannel(message.channel.id);
+        const listStr = updatedChannels.map(id => `<#${id}>`).join(', ');
+        const vnTime = getVNTimeInfo();
+
+        if (isAlreadyAdded) {
+            return message.reply(`ℹ️ **Kênh <#${message.channel.id}> đã có sẵn trong danh sách nhận thông báo!**\n📋 Tất cả các kênh (${updatedChannels.length}): ${listStr}\n🕒 **Thời gian hệ thống:** \`${vnTime.fullStr}\``);
+        }
+
+        return message.reply(`✅ **Đã thêm thành công kênh <#${message.channel.id}> vào danh sách nhận Bảng Xếp Hạng Hàng Ngày!**\n👉 Đúng **00:00 đêm** mỗi khi reset ngày, Yue sẽ tự động gửi bài Embed thông báo **Top 10 Peak PP** vào tất cả kênh đã cài đặt.\n📋 Danh sách kênh hiện tại (${updatedChannels.length}): ${listStr}\n🕒 **Múi giờ hệ thống (VN Time):** \`${vnTime.fullStr}\``);
     } catch (err) {
         console.error('❌ Lỗi setup Bảng Xếp Hạng:', err.message);
         return message.reply(`❌ Đã xảy ra lỗi khi cài đặt Kênh Bảng Xếp Hạng: ${err.message}`);

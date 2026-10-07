@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import { initBancho, activeLobbies } from '../../services/osu/banchoService.js';
 import { getLinkedOsuUsername } from '../../services/osu/userService.js';
 import { register247Room } from '../../services/multi247/room247Manager.js';
+import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 import { botConfig } from '../../config/botConfig.js';
 import { enableAutohostForChannel } from '../osuInGame/hostCommands.js';
 
@@ -87,7 +88,9 @@ export async function handleMakeRoomCommand(message) {
         // 🔓 TẮT MẬT KHẨU PHÒNG & BẬT FREEMOD + AUTOHOST MẶC ĐỊNH
         try {
             await channel.sendMessage('!mp password'); // Xóa mật khẩu phòng để mở công khai
+            await new Promise(resolve => setTimeout(resolve, 300));
             await channel.sendMessage('!mp set 0 0'); // HeadToHead, ScoreV1
+            await new Promise(resolve => setTimeout(resolve, 300));
             await channel.sendMessage('!mp mods FreeMod'); // Bật FreeMod mặc định
             enableAutohostForChannel(channel);
         } catch (setupErr) {
@@ -204,6 +207,7 @@ export async function handleMakeRoomCommand(message) {
 
     } catch (err) {
         console.error('Lỗi khi tạo room:', err);
+        sendAdminDebugLog('ERROR', 'Tạo phòng Multi Thất bại', `Người dùng ${message.author.tag} tạo phòng thất bại: ${err.message}`, { sender: message.author.tag, stack: err.stack });
         return message.reply('Có lỗi xảy ra trong quá trình tạo phòng Multi rồi Katashi ơi!');
     }
 }

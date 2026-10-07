@@ -5,6 +5,7 @@ import { activeLobbies } from '../../services/osu/banchoService.js';
 import { botConfig } from '../../config/botConfig.js';
 import { updatePlayer247Memory } from '../../services/multi247/room247Memory.js';
 import { get247RoomConfig } from '../../services/multi247/room247Manager.js';
+import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 
 const autohostQueues = new Map();
 const isAutohostActive = new Map();
@@ -33,10 +34,12 @@ export function resetRoomHostState(channelName) {
     if (!channelName) return;
     const key = typeof channelName === 'string' ? channelName : (channelName?.name || '');
     if (!key) return;
-    roomEmptyStatusMap.set(key, true);
+    roomEmptyStatusMap.delete(key);
     lastAssignedHostMap.delete(key);
-    autohostQueues.set(key, []);
+    autohostQueues.delete(key);
+    isAutohostActive.delete(key);
     skipVotes.delete(key);
+    welcomeCooldowns.delete(key);
     clearAfkHostTimer(key);
 }
 
@@ -545,6 +548,8 @@ export async function handleHostCommands(channel, message, args, command) {
         autohostQueues.set(channelName, []);
         clearSkipVotes(channelName);
         clearLobbyRequests(channelName);
+        const matchId = channelName.replace('#mp_', '');
+        sendAdminDebugLog('WARN', 'Autohost đã bị TẮT', `Phòng ${channelName} (Match #${matchId}) đã bị TẮT Autohost bởi ${sender}.`, { matchId, sender });
         return await channel.sendMessage(t('ahOff', roomLang));
     }
 

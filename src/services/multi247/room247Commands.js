@@ -53,8 +53,17 @@ export async function handle247RoomCommands(channel, message, commandString, sen
     if (['.sr', '!sr', '.stars', '!stars'].includes(cmd)) {
         if (!args[1]) {
             const currentMin = config?.starMin ?? 0.0;
-            const currentMax = config?.starMax ?? 6.0;
+            const currentMax = config?.starMax ?? 6.99;
             return await channel.sendMessage(t('starLimitInfo', roomLang, currentMin, currentMax));
+        }
+
+        // 🔒 CHỈ CÓ DUY NHẤT KATASHI MỚI CÓ QUYỀN ĐỔI STAR LIMIT
+        const isKatashi = isUserRef(channelName, senderUsername);
+        if (!isKatashi) {
+            const denyMsg = roomLang === 'en'
+                ? `YUE: ⛔ Only Katashi (Creator/Admin) has permission to change the Star Limit of 24/7 rooms!`
+                : `YUE: ⛔ Chỉ có duy nhất Katashi mới có quyền thay đổi Star Limit của phòng Cộng đồng 24/7!`;
+            return await channel.sendMessage(denyMsg);
         }
 
         const parts = args[1].split('-');
@@ -69,26 +78,9 @@ export async function handle247RoomCommands(channel, message, commandString, sen
             return await channel.sendMessage(t('starLimitInvalidRange', roomLang));
         }
 
-        // Quyền Ref hoặc Owner có thể chỉnh thẳng không cần biểu quyết
-        const isRefOrOwner = isUserRef(channelName, senderUsername);
-        if (isRefOrOwner) {
-            await update247RoomStarLimit(channel, minStar, maxStar);
-            clearRoomVote(channelName);
-            return await channel.sendMessage(t('starLimitForced', roomLang, senderUsername, minStar, maxStar));
-        }
-
-        // Tính số phiếu cần thiết (>50% số người chơi trong phòng)
-        const requiredVotes = Math.floor(totalPlayers / 2) + 1;
-
-        if (totalPlayers <= 1) {
-            // Chỉ có 1 người trong phòng -> Tự động duyệt luôn
-            await update247RoomStarLimit(channel, minStar, maxStar);
-            return await channel.sendMessage(t('starLimitUpdated', roomLang, minStar, maxStar));
-        }
-
-        const voteObj = startRoomVote(channelName, 'star_limit', { min: minStar, max: maxStar }, senderUsername, requiredVotes);
-
-        return await channel.sendMessage(t('voteStarted', roomLang, senderUsername, minStar, maxStar, requiredVotes, totalPlayers));
+        await update247RoomStarLimit(channel, minStar, maxStar);
+        clearRoomVote(channelName);
+        return await channel.sendMessage(t('starLimitForced', roomLang, senderUsername, minStar, maxStar));
     }
 
     // 2. LỆNH .VOTE (YES / NO)

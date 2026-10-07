@@ -100,42 +100,45 @@ function getActiveConfig() {
     if (PRESET_MODE === 'custom') {
         return {
             ...defaultFullConfig,
+            heavyLibraries: {
+                voice: false,       // 🔴 Tắt Voice (@discordjs/voice) trên Server VPS
+                ffmpeg: false,      // 🔴 Tắt FFMPEG (ffmpeg-static) trên Server VPS
+                canvas: false,      // 🔴 Tắt Canvas (@napi-rs/canvas) trên Server VPS
+                edgeTts: false,     // 🔴 Tắt Edge-TTS trên Server VPS
+            },
+            voice: {
+                enabled: false,     // 🔴 Tắt toàn bộ tính năng phòng Voice Discord
+                speechToText: false,
+                textToSpeech: false,
+                autoLeave: false,
+            },
             discord: {
                 ...defaultFullConfig.discord,
-                aiChat: false,
+                aiChat: true,       // 🟢 Bật Chat AI Text Discord
+                aiVision: false,    // 🔴 Tắt xử lý ảnh nặng
             },
             osuDiscordCommands: {
                 ...defaultFullConfig.osuDiscordCommands,
-                profile: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                recent: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                top: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                compare: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                beatmap: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                leaderboard: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                nochoke: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                whatif: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                calcPp: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                pickMapDirect: process.env.OSU_COMMANDS_DISCORD !== undefined ? process.env.OSU_COMMANDS_DISCORD === 'true' : true,
-                statCard: true,
+                enabled: true,      // 🟢 Bật Lệnh Osu Discord (.profile, .rs, .top, .stat...)
+                profile: true,
+                recent: true,
+                top: true,
+                compare: true,
+                beatmap: true,
+                leaderboard: true,
+                nochoke: true,
+                whatif: true,
+                calcPp: true,
+                pickMapDirect: true,
+                statCard: false,    // 🔴 Tắt vẽ thẻ ảnh Canvas để nhẹ RAM
             },
             osuMultiplayer: {
                 ...defaultFullConfig.osuMultiplayer,
-                enabled: process.env.OSU_MULTI_ENABLED !== undefined ? process.env.OSU_MULTI_ENABLED === 'true' : true,
-                normalRooms: process.env.OSU_MULTI_NORMAL_ROOMS !== undefined ? process.env.OSU_MULTI_NORMAL_ROOMS === 'true' : false,
-                community247Rooms: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : true,
-                keepAliveHeartbeat: process.env.OSU_MULTI_247_ROOMS !== undefined ? process.env.OSU_MULTI_247_ROOMS === 'true' : true,
-            },
-            heavyLibraries: {
-                voice: true,
-                ffmpeg: true,
-                canvas: true,
-                edgeTts: true,
-            },
-            voice: {
-                enabled: true,
-                speechToText: true,
-                textToSpeech: true,
-                autoLeave: true,
+                enabled: true,      // 🟢 Bật Osu Bancho IRC & Phòng Multi 24/7
+                normalRooms: false,
+                community247Rooms: true,
+                keepAliveHeartbeat: true,
+                dailyLeaderboard: true,
             }
         };
     }

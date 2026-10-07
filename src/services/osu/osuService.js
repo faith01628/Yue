@@ -368,6 +368,34 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         const calculator = new rosu.Performance(perfParams);
         const result = calculator.calculate(map);
 
+        // 🌟 Nếu Mod có chứa Relax (RX) hoặc AutoPilot (AP):
+        // rosu-pp sẽ tính stars của skill RX/AP bị giảm mạnh (ví dụ từ 9.76★ xuống 5.06★).
+        // Để giữ đúng Star Rating hiển thị thực tế của Map (như khi đánh DT/HR), ta tính thêm difficulty không có RX/AP.
+        const rawModsStr = String(perfParams.mods || '');
+        if (/RX|Relax|AP|Autopilot/i.test(rawModsStr)) {
+            const modsWithoutRxAp = rawModsStr
+                .replace(/RX|Relax|AP|Autopilot/gi, '')
+                .trim();
+
+            try {
+                const pureCalc = new rosu.Performance({
+                    ...perfParams,
+                    mods: modsWithoutRxAp
+                });
+                const pureRes = pureCalc.calculate(map);
+                const pureStars = pureRes.difficulty?.stars ?? pureRes.stars;
+
+                if (typeof pureStars === 'number' && !isNaN(pureStars) && pureStars > 0) {
+                    if (result.difficulty) {
+                        result.difficulty.stars = pureStars;
+                    }
+                    result.stars = pureStars;
+                }
+            } catch (pErr) {
+                console.warn('[rosu-pp] Lỗi tính Pure Star Rating không có RX/AP:', pErr.message);
+            }
+        }
+
         map.free();
         return result;
     } catch (error) {

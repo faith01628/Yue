@@ -3,9 +3,11 @@ import { isFeatureEnabled, setFeatureState } from '../../shared/config/featureTo
 import { memoryProvider } from '../../../brain/MemoryProvider.js';
 import { handleInfoCommand } from '../../../commands/info.js';
 import { handleSetupCommand } from '../../../commands/setup.js';
-import { handleSetupLeaderboardBoardCommand, handleHistoryLeaderboardCommand } from '../../../services/osu/dailyLeaderboardService.js';
+import { handleSetupLeaderboardBoardCommand, handleHistoryLeaderboardCommand } from '../../../commands/osu/setupLeaderboardCommand.js';
 import { handleDiscordToBanchoSync } from '../../../services/multiChatSyncService.js';
 import { handleAiChatMessage } from './aiChatHandler.js';
+import { handleOwnerAssistantCommand } from '../../../commands/ownerAssistantCommand.js';
+import { isOwnerUser } from '../../../services/ownerAssistantService.js';
 
 import {
     handleOsuProfileCommand,
@@ -34,6 +36,22 @@ export function registerMessageHandler(client) {
 
         const content = message.content.trim();
         const firstWord = content.split(/ +/)[0].toLowerCase();
+
+        // --- 👑 LỆNH TRỢ LÝ RIÊNG & HẸN GIỜ DÀNH CHO BOSS ---
+        if (['.remind', '.hemgio', '.reminds', '.remindlist', '.delremind', '.cancelremind', '.sleepnotify'].includes(firstWord)) {
+            const args = content.split(/ +/).slice(1);
+            return await handleOwnerAssistantCommand(message, args);
+        }
+
+        // Tự động nhận diện tin nhắn hẹn giờ trong DM với Boss
+        if (!message.guild && isOwnerUser(message.author.id)) {
+            const textLower = content.toLowerCase();
+            if (textLower.includes('nhắc') || textLower.includes('hẹn giờ') || textLower.includes('remind')) {
+                const args = content.split(/ +/);
+                if (firstWord.startsWith('.')) args.shift();
+                return await handleOwnerAssistantCommand(message, args);
+            }
+        }
 
         // --- CÀI ĐẶT & XEM BẢNG XẾP HẠNG 24/7 ---
         if (['.setupboard', '.setup247lb', '.setuplb', '!setupboard', '.unsetboard', '.unsetlb', '.removeboard'].includes(firstWord)) {

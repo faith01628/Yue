@@ -8,6 +8,32 @@ const userSpamWarnings = new Map();
 // 2. Bộ đệm 15 tin nhắn gần nhất từng phòng để phân tích Flame War (Ai gây war trước)
 const recentChannelChats = new Map();
 
+export function cleanupSafetyGuardRoom(channelName) {
+    if (!channelName) return;
+    recentChannelChats.delete(channelName);
+
+    for (const key of userMessageTimes.keys()) {
+        if (key.startsWith(`${channelName}_`)) userMessageTimes.delete(key);
+    }
+    for (const key of userSpamWarnings.keys()) {
+        if (key.startsWith(`${channelName}_`)) userSpamWarnings.delete(key);
+    }
+}
+
+// 🧹 TỰ ĐỘNG DỌN DẸP BỘ ĐỆM ANTI-SPAM ĐỊNH KỲ (MỖI 10 PHÚT)
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, times] of userMessageTimes.entries()) {
+        const freshTimes = times.filter(t => now - t <= 10000);
+        if (freshTimes.length === 0) {
+            userMessageTimes.delete(key);
+            userSpamWarnings.delete(key);
+        } else {
+            userMessageTimes.set(key, freshTimes);
+        }
+    }
+}, 10 * 60 * 1000);
+
 function recordChatHistory(channelName, sender, text) {
     if (!recentChannelChats.has(channelName)) {
         recentChannelChats.set(channelName, []);

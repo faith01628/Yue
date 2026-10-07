@@ -19,6 +19,11 @@ export function registerReadyHandler(client) {
             startDailyLeaderboardResetLoop(client);
         } catch (e) {}
 
+        try {
+            const { startOwnerAssistantLoop } = await import('../../../services/ownerAssistantService.js');
+            startOwnerAssistantLoop(client);
+        } catch (e) {}
+
         console.log(`\n==========================================================`);
         console.log(`🤖 Yue AI Master Control Panel • Chế độ: [${botConfig.mode.toUpperCase()}]`);
         console.log(`==========================================================`);

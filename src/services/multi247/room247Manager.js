@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
+import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 
 const ROOMS_FILE = path.resolve('data/multi247Rooms.json');
 
@@ -69,10 +70,19 @@ export async function update247RoomStarLimit(channel, minStar, maxStar) {
     // 1. Lưu config mới vào file DB
     update247RoomConfig(matchId, { starMin: minStar, starMax: maxStar });
 
-    // 2. Tạo tên phòng mới phản ánh Star Limit
-    const baseName = process.env.OSU_MULTI_247_DEFAULT_ROOM_NAME || "Yue's 24/7 Community Room";
-    const starTag = `(${minStar.toFixed(1)}* - ${maxStar.toFixed(1)}*)`;
-    const newRoomName = baseName.includes('*') ? baseName : `${baseName} ${starTag}`;
+    // 2. Tạo tên phòng mới phản ánh Star Limit chính xác
+    const currentConfig = get247RoomConfig(matchId);
+    let currentRoomName = currentConfig?.roomName || process.env.OSU_MULTI_247_DEFAULT_ROOM_NAME || "Yue's 24/7 Community Room";
+    const starTag = `${minStar.toFixed(1)}* - ${maxStar.toFixed(1)}*`;
+
+    // Tự động thay thế hoặc bổ sung Star Tag vào tên phòng
+    let newRoomName;
+    const starPattern = /\d+(\.\d+)?\*\s*-\s*\d+(\.\d+)?\*/;
+    if (starPattern.test(currentRoomName)) {
+        newRoomName = currentRoomName.replace(starPattern, starTag);
+    } else {
+        newRoomName = `${starTag} | ${currentRoomName}`;
+    }
 
     update247RoomConfig(matchId, { roomName: newRoomName });
 
@@ -169,11 +179,17 @@ export async function recreate247Room(oldMatchId, banchoClient) {
             console.warn(`[24/7 Auto-Recreate] Đóng phòng cũ ${oldKey} không thành công (có thể đã bị Bancho đóng):`, e.message);
         }
 
-        // Dọn dẹp timestamp cũ & trạng thái phòng cũ trong Map
+        // Dọn dẹp timestamp cũ & trạng thái phòng cũ hoàn toàn khỏi RAM
         roomLastActivityMap.delete(oldKey);
         try {
             const { resetRoomHostState } = await import('../../commands/osuInGame/hostCommands.js');
             resetRoomHostState(`#mp_${oldKey}`);
+            const { clearLobbyRequests } = await import('../../commands/osuInGame/mapCommands.js');
+            clearLobbyRequests(`#mp_${oldKey}`);
+            const { cleanupSafetyGuardRoom } = await import('./communitySafetyGuard.js');
+            cleanupSafetyGuardRoom(`#mp_${oldKey}`);
+            const { cleanupBanchoRoomState } = await import('../osu/banchoService.js');
+            cleanupBanchoRoomState(`#mp_${oldKey}`);
         } catch (e) { }
 
         // 3. Tạo phòng mới trên Bancho IRC (THỰC HIỆN TRƯỚC KHI XÓA DB CŨ)
@@ -200,7 +216,9 @@ export async function recreate247Room(oldMatchId, banchoClient) {
         // Đặt cấu hình mặc định
         try {
             await newChannel.sendMessage('!mp password');
+            await new Promise(resolve => setTimeout(resolve, 300));
             await newChannel.sendMessage('!mp set 0 0');
+            await new Promise(resolve => setTimeout(resolve, 300));
             await newChannel.sendMessage('!mp mods FreeMod');
         } catch (setErr) {
             console.warn('[24/7 Auto-Recreate] Lỗi cài đặt mặc định phòng:', setErr.message);
@@ -260,6 +278,7 @@ export async function recreate247Room(oldMatchId, banchoClient) {
         return newMatchId;
     } catch (err) {
         console.error('[24/7 Auto-Recreate Error]:', err.message);
+        sendAdminDebugLog('ERROR', 'Tạo phòng 24/7 Thất bại', `Tạo lại phòng 24/7 thất bại cho "${roomConfig?.roomName || oldKey}": ${err.message}`, { matchId: oldKey, stack: err.stack });
         return null;
     } finally {
         isRecreatingSet.delete(oldKey);
@@ -305,13 +324,18 @@ export async function sync247RoomStateViaMpSettings(channel) {
         syncLobbyPlayersToQueue(channel);
         console.log(`[24/7 Sync] 👥 Phòng ${channelName} hiện có ${activePlayers.length} người chơi (${activePlayers.join(', ')}). Đặt isEmpty = false.`);
 
+        // Kiểm tra host hiện tại trên Bancho
+        const currentHostSlot = slots.find(s => s && s.user && s.isHost);
+        const currentHostName = currentHostSlot?.user?.username || '';
+
+        if (!currentHostName) {
+            console.warn(`[24/7 Sync Alert] ⚠️ Phòng ${channelName} đang có ${activePlayers.length} người chơi nhưng KHÔNG CÓ HOST trên Bancho!`);
+            sendAdminDebugLog('WARN', 'Phòng không có Host', `Phòng ${channelName} (Match #${matchId}) hiện đang có ${activePlayers.length} người chơi (${activePlayers.join(', ')}) nhưng KHÔNG CÓ HOST trên Bancho!`, { matchId });
+        }
+
         if (isAutohostOn(channelName)) {
             const queue = getQueue(channelName);
             const targetHost = queue[0] || activePlayers[0];
-
-            // Kiểm tra host hiện tại trên Bancho
-            const currentHostSlot = slots.find(s => s && s.user && s.isHost);
-            const currentHostName = currentHostSlot?.user?.username || '';
 
             if (currentHostName.toLowerCase() === targetHost.toLowerCase()) {
                 console.log(`[24/7 Sync] 🎯 Host hiện tại trên Bancho (${currentHostName}) đã khớp với target Host (${targetHost}). KHÔNG gửi lại !mp host.`);
@@ -404,32 +428,29 @@ async function findAndUpdate247DiscordEmbed(roomConfig, newMatchId, inviteStatus
             }
         }
 
-        // 4. Nếu tìm thấy tin nhắn Embed cũ -> Chỉnh sửa trực tiếp sang Match ID mới
+        // 4. Nếu tìm thấy tin nhắn Embed cũ -> Cập nhật/Edit tin nhắn cũ để báo thông tin đã được làm mới
         if (targetMessage) {
             try {
                 await targetMessage.edit({ embeds: [newEmbed] });
                 update247RoomConfig(newMatchId, {
-                    discordChannelId: targetMessage.channel.id,
+                    discordChannelId: targetChannel.id,
                     discordMessageId: targetMessage.id
                 });
-                console.log(`[24/7 Auto-Recreate] 🖼️ Đã chỉnh sửa thành công Embed Discord cũ sang Match ID mới: ${newMatchId} (Message ID: ${targetMessage.id})`);
+                console.log(`[24/7 Auto-Recreate] 📝 Đã cập nhật Embed phòng 24/7 với Match ID mới: ${newMatchId}`);
                 return;
             } catch (editErr) {
-                console.warn('[24/7 Auto-Recreate] Edit tin nhắn cũ thất bại, chuyển sang gửi tin nhắn mới:', editErr.message);
+                console.warn('[24/7 Auto-Recreate] Edit tin nhắn cũ thất bại:', editErr.message);
             }
         }
 
-        // 5. Nếu có channel nhưng không tìm thấy tin nhắn cũ -> Gửi tin nhắn Embed mới
+        // 5. Nếu chưa có tin nhắn cũ -> Tạo tin nhắn Embed đầu tiên (không gửi text thông báo tự động)
         if (targetChannel) {
-            const newSentMsg = await targetChannel.send({
-                content: `🔄 **Phòng 24/7 (${roomName}) đã tự động tái tạo phòng mới sau 20 phút vắng người!**`,
-                embeds: [newEmbed]
-            });
+            const newSentMsg = await targetChannel.send({ embeds: [newEmbed] });
             update247RoomConfig(newMatchId, {
                 discordChannelId: targetChannel.id,
                 discordMessageId: newSentMsg.id
             });
-            console.log(`[24/7 Auto-Recreate] 📨 Đã gửi tin nhắn Embed Discord mới với Match ID: ${newMatchId}`);
+            console.log(`[24/7 Auto-Recreate] 📨 Đã tạo tin nhắn Embed phòng 24/7 mới với Match ID: ${newMatchId}`);
         } else {
             console.warn('[24/7 Auto-Recreate] ⚠️ Không tìm thấy kênh Discord nào để cập nhật Embed phòng 24/7.');
         }
@@ -439,9 +460,9 @@ async function findAndUpdate247DiscordEmbed(roomConfig, newMatchId, inviteStatus
 }
 
 /**
- * 🎯 VÒNG LẶP GIỮ PHÒNG 24/7 (AUTO-RECREATE SAU 20 PHÚT VẮNG NGƯỜI)
- * Nếu phòng trống 0 người chơi liên tục trong 20 phút -> Tự đóng & tạo phòng 24/7 mới,
- * sau đó cập nhật Match ID mới lên tin nhắn Embed Discord!
+ * 🎯 VÒNG LẶP GIỮ PHÒNG 24/7 (AUTO-RECREATE SAU 20 PHÚT VẮNG NGƯỜI HOẶC KHI SẬP KÊNH BANCHO)
+ * Nếu phòng trống 0 người chơi liên tục trong 20 phút hoặc bị ngắt kết nối Bancho -> Tự đóng & tạo phòng 24/7 mới,
+ * sau đó thông báo Match ID mới lên tin nhắn Embed Discord!
  */
 export function start247KeepAliveLoop(banchoClient) {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
@@ -467,6 +488,13 @@ export function start247KeepAliveLoop(banchoClient) {
                 const channelName = `#mp_${matchId}`;
                 const channel = client.getChannel(channelName);
                 if (!channel) continue;
+
+                // 0. Nếu kênh đã bị ngắt/đóng trên Bancho IRC (joined = false) -> Tái tạo phòng ngay
+                if (typeof channel.joined === 'boolean' && !channel.joined) {
+                    console.log(`[24/7 Keep-Alive] 🚪 Phòng ${channelName} đã bị giải tán trên Bancho (joined = false). Tái tạo phòng mới ngay lập tức...`);
+                    await recreate247Room(matchId, client);
+                    continue;
+                }
 
                 // 1. Kiểm tra số lượng người chơi thực tế trong lobby
                 let activePlayerCount = 0;

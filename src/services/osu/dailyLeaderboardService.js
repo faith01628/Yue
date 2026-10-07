@@ -7,9 +7,35 @@ import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 const LEADERBOARD_FILE = path.resolve('data/multi247DailyLeaderboard.json');
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * 🕒 Helper: Lấy thông tin ngày giờ hiện tại theo đúng Múi giờ Việt Nam (Asia/Ho_Chi_Minh - GMT+7)
+ */
+export function getVNTimeInfo(date = new Date()) {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    const parts = formatter.formatToParts(date);
+    const map = {};
+    for (const p of parts) {
+        if (p.type !== 'literal') map[p.type] = p.value;
+    }
+    const dateStr = `${map.year}-${map.month}-${map.day}`;
+    const timeStr = `${map.hour}:${map.minute}:${map.second}`;
+    const fullStr = `${dateStr} ${timeStr} (UTC+7 / Asia/Ho_Chi_Minh)`;
+    const hour = parseInt(map.hour, 10);
+    const minute = parseInt(map.minute, 10);
+    return { dateStr, timeStr, fullStr, hour, minute, year: map.year, month: map.month, day: map.day };
+}
+
 function getTodayDateString() {
-    // Ép kiểu lấy ngày YYYY-MM-DD theo đúng múi giờ Asia/Ho_Chi_Minh (GMT+7)
-    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+    return getVNTimeInfo().dateStr;
 }
 
 function ensureStorageFile() {
@@ -425,31 +451,111 @@ export function buildDailyLeaderboardEmbed(dateStr) {
     return embed;
 }
 
-/**
- * 📨 Gửi tin nhắn Embed Bảng Xếp Hạng Top 10 Hàng Ngày lên Kênh Discord đã cài đặt
- */
-export async function postDailyTop10ToDiscord(clientOverride = null, targetDateStr = null) {
-    const client = clientOverride || leaderboardDiscordClient;
-    if (!client) return;
-
+export function getLeaderboardChannelIds() {
     const config = loadBoardConfig();
-    if (!config.channelId) return;
-
-    try {
-        const channel = await client.channels.fetch(config.channelId).catch(() => null);
-        if (!channel || !channel.isTextBased()) return;
-
-        const dateToPost = targetDateStr || getTodayDateString();
-        const embedData = buildDailyLeaderboardEmbed(dateToPost);
-
-        await channel.send({
-            content: `📅 **THÔNG BÁO BẢNG XẾP HẠNG TOP 10 NGÀY (${dateToPost}):**`,
-            embeds: [embedData]
-        });
-        console.log(`[Leaderboard Daily] 📨 Đã tự động gửi thông báo Top 10 Ngày ${dateToPost} lên Discord!`);
-    } catch (err) {
-        console.error('❌ Lỗi gửi thông báo Bảng Xếp Hạng Ngày lên Discord:', err.message);
+    let channels = [];
+    if (Array.isArray(config.channelIds)) {
+        channels = [...config.channelIds];
     }
+    if (config.channelId && !channels.includes(config.channelId)) {
+        channels.push(config.channelId);
+    }
+
+    // 🛡️ FALLBACK TỰ ĐỘNG: Nếu chưa cài đặt channelIds trong multi247BoardConfig.json, 
+    // tự động lấy discordChannelId từ cấu hình phòng 24/7 (multi247Rooms.json)
+    if (channels.length === 0) {
+        try {
+            const roomsFile = path.resolve('data/multi247Rooms.json');
+            const roomsData = safeReadJSON(roomsFile, {});
+            for (const rId of Object.keys(roomsData)) {
+                const room = roomsData[rId];
+                if (room && room.discordChannelId && !channels.includes(room.discordChannelId)) {
+                    channels.push(room.discordChannelId);
+                }
+            }
+            if (channels.length > 0) {
+                config.channelIds = channels;
+                saveBoardConfig(config);
+                console.log(`[Leaderboard Service] 💡 Tự động đồng bộ ${channels.length} Kênh Discord từ phòng 24/7 sang Bảng Xếp Hạng: ${channels.join(', ')}`);
+            }
+        } catch (e) {
+            console.error('[Leaderboard Service] ⚠️ Lỗi đọc fallback kênh từ multi247Rooms.json:', e.message);
+        }
+    }
+
+    return Array.from(new Set(channels.filter(Boolean)));
+}
+
+export function addLeaderboardChannel(channelId) {
+    if (!channelId) return getLeaderboardChannelIds();
+    const config = loadBoardConfig();
+    let channels = getLeaderboardChannelIds();
+    if (!channels.includes(channelId)) {
+        channels.push(channelId);
+    }
+    config.channelIds = channels;
+    delete config.channelId;
+    saveBoardConfig(config);
+    return channels;
+}
+
+export function removeLeaderboardChannel(channelId) {
+    const config = loadBoardConfig();
+    if (channelId === 'all') {
+        config.channelIds = [];
+        delete config.channelId;
+        saveBoardConfig(config);
+        return [];
+    }
+    let channels = getLeaderboardChannelIds().filter(id => id !== channelId);
+    config.channelIds = channels;
+    delete config.channelId;
+    saveBoardConfig(config);
+    return channels;
+}
+
+/**
+ * 📨 Gửi tin nhắn Embed Bảng Xếp Hạng Top 10 Hàng Ngày lên TẤT CẢ các Kênh Discord đã cài đặt
+ */
+export async function postDailyTop10ToDiscord(clientOverride = null, targetDateStr = null, targetChannelId = null) {
+    const client = clientOverride || leaderboardDiscordClient;
+    const vnInfo = getVNTimeInfo();
+
+    if (!client) {
+        console.warn(`[Leaderboard Daily] ⚠️ [${vnInfo.fullStr}] Discord Client chưa sẵn sàng.`);
+        return 0;
+    }
+
+    const channelIds = targetChannelId ? [targetChannelId] : getLeaderboardChannelIds();
+    if (!channelIds || channelIds.length === 0) {
+        console.warn(`[Leaderboard Daily] ⚠️ [${vnInfo.fullStr}] Chưa cài đặt Kênh Discord nào. Cần dùng lệnh .setuplb trên Discord.`);
+        return 0;
+    }
+
+    const dateToPost = targetDateStr || getTodayDateString();
+    const embedData = buildDailyLeaderboardEmbed(dateToPost);
+
+    let sentCount = 0;
+    for (const chId of channelIds) {
+        try {
+            const channel = await client.channels.fetch(chId).catch(() => null);
+            if (!channel || !channel.isTextBased()) {
+                console.warn(`[Leaderboard Daily] ⚠️ [${vnInfo.fullStr}] Không tìm thấy kênh text Discord với ID: ${chId}`);
+                continue;
+            }
+
+            await channel.send({
+                content: `📅 **THÔNG BÁO BẢNG XẾP HẠNG TOP 10 NGÀY (${dateToPost}):**`,
+                embeds: [embedData]
+            });
+            sentCount++;
+            console.log(`[Leaderboard Daily] 📨 [${vnInfo.fullStr}] Đã gửi thông báo Top 10 Ngày ${dateToPost} lên kênh Discord ${chId}!`);
+        } catch (err) {
+            console.error(`❌ [${vnInfo.fullStr}] Lỗi gửi thông báo Bảng Xếp Hạng Ngày lên kênh Discord ${chId}:`, err.message);
+        }
+    }
+
+    return sentCount;
 }
 
 let resetLoopTimer = null;
@@ -462,36 +568,46 @@ export function startDailyLeaderboardResetLoop(client) {
 
     setDiscordClientForLeaderboard(client);
 
+    const startVN = getVNTimeInfo();
+    console.log(`[Leaderboard Loop] ⏰ Khởi chạy vòng lặp kiểm tra Daily Reset Top PP (Mỗi 1 phút).`);
+    console.log(`[Leaderboard Loop] 🕒 Múi giờ Việt Nam hiện tại: ${startVN.fullStr}`);
+
     // Khởi chạy vòng lặp kiểm tra mỗi 1 phút
     resetLoopTimer = setInterval(async () => {
         try {
             const config = loadBoardConfig();
-            const todayStr = getTodayDateString();
+            const vnInfo = getVNTimeInfo();
+            const todayStr = vnInfo.dateStr;
 
             if (!config.lastPostedDailyDate) {
                 config.lastPostedDailyDate = todayStr;
                 saveBoardConfig(config);
+                console.log(`[Leaderboard Loop] 📌 Khởi tạo mốc ngày đầu tiên: ${todayStr} (VN Time: ${vnInfo.fullStr})`);
                 return;
             }
 
-            // Nếu ngày hôm nay khác với ngày đã gửi gần nhất -> Kiểm tra điều kiện gửi
+            // Nếu ngày hôm nay khác với ngày đã gửi gần nhất -> Đã sang ngày mới!
             if (config.lastPostedDailyDate !== todayStr) {
                 const prevDateStr = config.lastPostedDailyDate;
-                const now = new Date();
-                const currentHour = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false, hour: '2-digit' }), 10);
 
-                // CHỈ tự động gửi thông báo nếu hiện tại đang là đầu ngày (00:00 -> 00:59 AM)
-                // Nếu Bot vừa restart vào giữa ngày (11h sáng, 3h chiều...), chỉ cập nhật mốc ngày chứ KHÔNG gửi rác vào Discord
-                if (currentHour === 0) {
-                    console.log(`[Leaderboard Midnight] 🌙 Đã sang ngày mới (${todayStr}). Tiến hành gửi Top 10 của ngày vừa kết thúc (${prevDateStr})...`);
-                    await postDailyTop10ToDiscord(client, prevDateStr);
-                    checkAndArchiveMonthlyLeaderboard();
+                console.log(`\n==========================================================`);
+                console.log(`[Leaderboard Midnight] 🌙 ĐÃ SANG NGÀY MỚI! (Mốc cũ: ${prevDateStr} ➔ Mốc mới: ${todayStr})`);
+                console.log(`[Leaderboard Midnight] 🕒 Thời gian Việt Nam thực tế: ${vnInfo.fullStr}`);
+                console.log(`[Leaderboard Midnight] 🚀 Tiến hành tự động gửi Bảng Xếp Hạng Top 10 của ngày vừa kết thúc (${prevDateStr})...`);
+
+                const sentCount = await postDailyTop10ToDiscord(client, prevDateStr);
+                if (sentCount > 0) {
+                    console.log(`[Leaderboard Midnight] ✅ Đã gửi bài Embed Top 10 Ngày ${prevDateStr} tới ${sentCount} kênh Discord!`);
                 } else {
-                    console.log(`[Leaderboard Midnight] 🔄 Bot khởi động giữa ngày (${todayStr}, ${currentHour}h). Đã cập nhật mốc ngày và chờ đúng 00:00 đêm.`);
+                    console.log(`[Leaderboard Midnight] ⚠️ Không gửi được bài Embed (Vui lòng kiểm tra lại kênh nhận bài .setuplb).`);
                 }
+
+                checkAndArchiveMonthlyLeaderboard();
 
                 config.lastPostedDailyDate = todayStr;
                 saveBoardConfig(config);
+                console.log(`[Leaderboard Midnight] 💾 Đã cập nhật lastPostedDailyDate = ${todayStr}`);
+                console.log(`==========================================================\n`);
             }
         } catch (e) {
             console.error('❌ Lỗi vòng lặp reset ngày Leaderboard:', e.message);

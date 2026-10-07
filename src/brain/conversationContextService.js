@@ -117,6 +117,10 @@ export function updateTopicSummary(channelId, userPrompt, aiReply) {
     }
 
     current.updatedAt = Date.now();
+    if (topicSummaries.size >= 100 && !topicSummaries.has(channelId)) {
+        const firstKey = topicSummaries.keys().next().value;
+        topicSummaries.delete(firstKey);
+    }
     topicSummaries.set(channelId, current);
 }
 

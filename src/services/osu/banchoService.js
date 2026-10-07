@@ -19,7 +19,7 @@ import {
 } from '../../commands/osuInGame/hostCommands.js';
 import { handle247RoomCommands } from '../multi247/room247Commands.js';
 import { getRoomLanguage, t } from '../multi247/multilingualService.js';
-import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247Room, reset247RoomLobbyDefaults, start247KeepAliveLoop, touch247RoomActivity, recreate247Room } from '../multi247/room247Manager.js';
+import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247Room, start247KeepAliveLoop, touch247RoomActivity, recreate247Room } from '../multi247/room247Manager.js';
 import { recordRoomMatch, handleMatchEvaluationCommand, generateMatchSummaryCommentary } from './matchEvaluatorService.js';
 import { recordMatchDailyPeakPP, formatDailyLeaderboardIRC } from './dailyLeaderboardService.js';
 
@@ -54,6 +54,18 @@ const isRotatingMap = new Map();
 const previousValidRoomMapId = new Map();
 const hostViolationCount = new Map();
 const isCheckingStarLimit = new Map();
+
+export function cleanupBanchoRoomState(channelName) {
+    if (!channelName) return;
+    attachedChannels.delete(channelName);
+    channelCooldowns.delete(channelName);
+    isRotatingMap.delete(channelName);
+    previousValidRoomMapId.delete(channelName);
+
+    for (const key of hostViolationCount.keys()) {
+        if (key.startsWith(`${channelName}_`)) hostViolationCount.delete(key);
+    }
+}
 
 function getCurrentHostName(channel) {
     try {
@@ -474,6 +486,16 @@ async function handleInGameChat(message) {
         if (senderUsername.toLowerCase() === 'banchobot') {
             const lowerContent = content.toLowerCase();
 
+            // Bắt sự kiện phòng bị giải tán / đóng từ BanchoBot
+            if (lowerContent.includes('closed the match') || lowerContent.includes('closed match') || lowerContent.includes('match disbanded') || lowerContent.includes('disbanded the match')) {
+                const matchId = channelName.replace('#mp_', '');
+                if (is247CommunityRoom(matchId)) {
+                    console.log(`🔄 [BanchoBot Tracker] Phòng 24/7 ${matchId} đã bị giải tán/đóng trên Bancho. Tiến hành tự động tái tạo phòng mới...`);
+                    recreate247Room(matchId, bancho).catch(e => console.error('[recreate247Room BanchoClose Error]:', e.message));
+                }
+                return;
+            }
+
             // Bắt sự kiện tất cả người chơi đã Ready từ BanchoBot chat
             if (lowerContent.includes('all players are ready') || lowerContent.includes('all players ready')) {
                 clearAfkHostTimer(channelName);
@@ -544,11 +566,6 @@ async function handleInGameChat(message) {
                         console.error('[MatchEvaluator AutoRecord Error]:', mErr.message);
                     }
                 }, 1500);
-
-                // ⚙️ TỰ ĐỘNG RESET VỀ SETTING CHUẨN + FREEMOD + KHÔNG MẬT KHẨU SAU MỖI TRẬN
-                if (is247CommunityRoom(matchId) || isAutohostOn(channelName)) {
-                    await reset247RoomLobbyDefaults(channel);
-                }
 
                 if (is247CommunityRoom(matchId) && !isAutohostOn(channelName)) {
                     enableAutohostForChannel(channel);

@@ -1,6 +1,7 @@
 import { isUserRef } from './refCommands.js';
 import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
 import { calculateBeatmapPP } from '../../services/osu/osuService.js';
+import { is247CommunityRoom, get247RoomConfig } from '../../services/multi247/room247Manager.js';
 
 export const currentRoomMapId = new Map();
 const lobbyRequests = new Map();
@@ -13,9 +14,12 @@ function getRequestsMap(channelName) {
 }
 
 export function clearLobbyRequests(channelName) {
+    if (!channelName) return;
     if (lobbyRequests.has(channelName)) {
         lobbyRequests.get(channelName).clear();
+        lobbyRequests.delete(channelName);
     }
+    currentRoomMapId.delete(channelName);
 }
 
 function addMapRequest(channelName, username, mapObject) {
@@ -106,12 +110,18 @@ function parseRandomArgs(args) {
     return { stars, maxDuration, statuses };
 }
 
-async function fetchRandomBeatmap({ stars, maxDuration, statuses }) {
+async function fetchRandomBeatmap({ stars, maxDuration, statuses }, roomStarMin = 0.0, roomStarMax = 10.0) {
     try {
         const apiKey = process.env.OSU_API_KEY;
-        const targetStar = stars !== null ? stars : (Math.random() * 3.5 + 3.5);
-        const minStar = Math.max(1, targetStar - 0.4);
-        const maxStar = targetStar + 0.4;
+        let targetStar = stars;
+        if (targetStar === null) {
+            targetStar = roomStarMin + Math.random() * (roomStarMax - roomStarMin);
+        } else {
+            targetStar = Math.max(roomStarMin, Math.min(roomStarMax, targetStar));
+        }
+
+        const minStar = Math.max(roomStarMin, targetStar - 0.4);
+        const maxStar = Math.min(roomStarMax, targetStar + 0.4);
 
         if (apiKey) {
             const sinceDate = new Date(Date.now() - Math.floor(Math.random() * 5 * 365 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
@@ -374,11 +384,24 @@ export async function handleMapCommands(channel, message, args, command) {
 
     if (['.rnd', '!rnd', '.random', '!random'].includes(lowerCmd)) {
         const options = parseRandomArgs(args);
-        const starInfo = options.stars ? `~${options.stars}★` : 'random★';
+        
+        const matchId = channelName.replace('#mp_', '');
+        const is247 = is247CommunityRoom(matchId);
+        const roomConfig = is247 ? get247RoomConfig(matchId) : null;
+        const roomStarMin = roomConfig?.starMin ?? 0.0;
+        const roomStarMax = roomConfig?.starMax ?? 10.0;
+
+        let starInfo = options.stars !== null 
+            ? `~${options.stars}★` 
+            : `${roomStarMin.toFixed(1)}★ - ${roomStarMax.toFixed(1)}★`;
+
+        if (options.stars !== null && (options.stars < roomStarMin || options.stars > roomStarMax)) {
+            await channel.sendMessage(`YUE: Star rating (${options.stars}★) is outside room limit (${roomStarMin.toFixed(1)}★ - ${roomStarMax.toFixed(1)}★). Searching within room limit...`);
+        }
         
         await channel.sendMessage(`YUE: Searching for map (${starInfo}, max ${Math.round(options.maxDuration / 60)}m)...`);
 
-        const map = await fetchRandomBeatmap(options);
+        const map = await fetchRandomBeatmap(options, roomStarMin, roomStarMax);
 
         if (!map) {
             return await channel.sendMessage(`YUE: No matching map found! Try widening the star range.`);

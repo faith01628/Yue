@@ -23,6 +23,10 @@ export async function sendAdminDebugLog(level = 'ERROR', title = '', message = '
     if (now - lastTime < THROTTLE_MS) {
         return;
     }
+    if (lastLogTimeMap.size >= 200) {
+        const firstKey = lastLogTimeMap.keys().next().value;
+        lastLogTimeMap.delete(firstKey);
+    }
     lastLogTimeMap.set(logKey, now);
 
     try {

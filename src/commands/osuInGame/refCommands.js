@@ -15,20 +15,17 @@ function getRefList(channelName) {
  */
 export function isUserRef(channelName, username) {
     if (!username) return false;
-    const userLower = username.toLowerCase();
+    const userLower = username.toLowerCase().replace(/^\[|\]$/g, '');
 
     // Katashi (Creator) luôn có quyền Ref tối cao
-    if (userLower === 'katashi' || userLower === '[katashi]') return true;
+    if (userLower === 'katashi') return true;
 
     const matchId = (channelName || '').replace('#mp_', '');
     const config = get247RoomConfig(matchId);
 
     // 🔒 ĐỐI VỚI PHÒNG CỘNG ĐỒNG 24/7: CHỈ KATASHI LÀ REF DUY NHẤT!
     if (config && config.is247) {
-        if (config.ownerOsuName && config.ownerOsuName.toLowerCase() === userLower) {
-            return true;
-        }
-        return false; // Chặn tất cả người chơi khác trong phòng 24/7
+        return false; // Chặn tất cả người chơi khác trong phòng 24/7 (Kể cả chủ phòng)
     }
 
     // Kiểm tra trong danh sách Ref được gán bằng lệnh .addref (Cho phòng thường)
