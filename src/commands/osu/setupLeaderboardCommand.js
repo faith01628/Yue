@@ -64,7 +64,7 @@ export async function handleSetupLeaderboardBoardCommand(message, args = []) {
 
         // 3. NẾU LÀ THỬ GỬI THÔNG BÁO (test / send / now)
         if (['test', 'send', 'now'].includes(subCommand)) {
-            addLeaderboardChannel(message.channel.id);
+            // Gửi thử chỉ tới kênh hiện tại, KHÔNG đăng ký kênh vào danh sách nhận tự động
             const vnTime = getVNTimeInfo();
             await postDailyTop10ToDiscord(message.client, args[1] || null, message.channel.id);
             return message.reply(`🧪 **Đã kích hoạt gửi thử Bảng Xếp Hạng Top 10!** Đã gửi tới kênh <#${message.channel.id}>.\n🕒 **Thời gian gửi (VN Time):** \`${vnTime.fullStr}\``);

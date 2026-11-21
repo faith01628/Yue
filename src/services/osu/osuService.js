@@ -306,6 +306,7 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
 
     if (!mapBytes) {
         const urls = [
+            `https://osu.direct/api/osu/${beatmapId}`,
             `https://osu.ppy.sh/osu/${beatmapId}`,
             `https://catboy.best/osu/${beatmapId}`,
             `https://sayobot.cn/osu/${beatmapId}`
@@ -346,14 +347,37 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
 
     try {
         const map = new rosu.Beatmap(mapBytes);
+
+        // 🎯 Xử lý chuyển đổi Game Mode (0: std, 1: taiko, 2: catch, 3: mania)
+        let targetMode = options.mode;
+        if (typeof targetMode === 'string') {
+            const mLower = targetMode.toLowerCase();
+            if (mLower === 'osu' || mLower === 'std') targetMode = 0;
+            else if (mLower === 'taiko') targetMode = 1;
+            else if (mLower === 'catch' || mLower === 'fruits' || mLower === 'ctb') targetMode = 2;
+            else if (mLower === 'mania') targetMode = 3;
+            else targetMode = undefined;
+        }
+        if (typeof targetMode === 'number' && targetMode >= 0 && targetMode <= 3) {
+            if (map.mode !== targetMode) {
+                try {
+                    map.convert(targetMode);
+                } catch (convErr) {
+                    console.warn(`[rosu-pp] Không thể convert map sang mode ${targetMode}:`, convErr.message);
+                }
+            }
+        }
         
         // 🎯 Build Params chuẩn cho rosu-pp-js
-        const perfParams = {};
+        const perfParams = {
+            lazer: false // osu! Bancho Multiplayer dùng hệ thống chấm điểm Classic (Stable)
+        };
 
         if (options.mods !== undefined && options.mods !== null) {
             perfParams.mods = Array.isArray(options.mods) ? options.mods.join('') : options.mods;
         }
         if (options.misses !== undefined) perfParams.misses = options.misses;
+        if (options.combo !== undefined && options.combo !== null) perfParams.combo = options.combo;
 
         // Nếu truyền n100 và n50
         if (options.n100 !== undefined) perfParams.n100 = options.n100;
@@ -404,6 +428,70 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
     }
 }
 
+export function toOsuApiRuleset(rawMode) {
+    if (!rawMode) return 'osu';
+    const s = String(rawMode).toLowerCase().trim();
+    if (s === '1' || s === 'taiko') return 'taiko';
+    if (s === '2' || s === 'catch' || s === 'ctb' || s === 'fruits') return 'fruits';
+    if (s === '3' || s === 'mania') return 'mania';
+    return 'osu';
+}
+
+/**
+ * 7.1. Lấy Score ID và thông tin Score của User trên 1 Beatmap (từ osu! API v2)
+ */
+export async function getUserBeatmapScoreDetail(beatmapId, userId, mode = 'osu') {
+    if (!beatmapId || !userId) return null;
+    const apiMode = toOsuApiRuleset(mode);
+
+    try {
+        const token = await getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+        // 1. Thử lấy từ /all để lấy được score mới nhất của user trên map này
+        const allRes = await axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores/users/${userId}/all`, {
+            headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            params: { mode: apiMode },
+            timeout: 3000
+        }).catch(() => null);
+
+        if (Array.isArray(allRes?.data?.scores) && allRes.data.scores.length > 0) {
+            const scores = allRes.data.scores;
+            scores.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (scores[0]?.id) return scores[0];
+        }
+
+        // 2. Thử lấy từ Recent Plays (nếu vừa đánh xong trong phòng multi)
+        const recentRes = await axios.get(`https://osu.ppy.sh/api/v2/users/${userId}/scores/recent`, {
+            headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            params: { include_fails: 0, limit: 5, mode: apiMode },
+            timeout: 3000
+        }).catch(() => null);
+
+        if (Array.isArray(recentRes?.data)) {
+            const match = recentRes.data.find(s => String(s.beatmap?.id) === String(beatmapId) || String(s.beatmap_id) === String(beatmapId));
+            if (match && match.id) {
+                return match;
+            }
+        }
+
+        // 3. Fallback: Lấy Personal Best trên map đó
+        const pbRes = await axios.get(`https://osu.ppy.sh/api/v2/beatmaps/${beatmapId}/scores/users/${userId}`, {
+            headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            params: { mode: apiMode },
+            timeout: 3000
+        }).catch(() => null);
+
+        if (pbRes?.data?.score?.id) {
+            return pbRes.data.score;
+        }
+
+        return null;
+    } catch (err) {
+        return null;
+    }
+}
+
 /**
  * 8. Lấy thông tin Match Multiplayer từ osu! API v2
  */
@@ -432,4 +520,68 @@ export async function getMatchDetails(matchId) {
         }
         return null;
     }
-}
+}
+
+
+/**
+ * 9. Lấy toàn bộ lượt chơi gần đây của User trên 1 Beatmap (CHỈ lấy từ /scores/recent giống lệnh .rs/.r)
+ * Tuyệt đối KHÔNG lấy từ /beatmaps/{id}/scores/users/{uid} để tránh lấy nhầm Personal Best cũ từ nhiều tháng trước.
+ */
+export async function getUserBeatmapPlays(beatmapId, userId, mode = 'osu') {
+    if (!beatmapId || !userId) return [];
+    const apiMode = toOsuApiRuleset(mode);
+    const plays = new Map();
+
+    try {
+        const recents = await fetchOsuAPI(`/users/${userId}/scores/recent`, {
+            include_fails: 0,
+            limit: 20,
+            mode: apiMode
+        });
+
+        if (Array.isArray(recents)) {
+            for (const s of recents) {
+                if (!s) continue;
+                const bid = s.beatmap?.id ?? s.beatmap_id;
+                if (String(bid) !== String(beatmapId)) continue;
+                const time = new Date(s.ended_at || s.created_at || 0).getTime();
+                const key = s.id || `${s.score}_${time}`;
+                plays.set(key, {
+                    id: s.id || null,
+                    pp: typeof s.pp === 'number' && s.pp > 0 ? s.pp : null,
+                    score: s.total_score ?? s.score ?? null,
+                    accuracy: s.accuracy ?? null,
+                    maxCombo: s.max_combo ?? null,
+                    mods: s.mods || [],
+                    statistics: s.statistics || {},
+                    time
+                });
+            }
+        }
+    } catch {
+        // ignore - caller handles fallback
+    }
+
+    return Array.from(plays.values());
+}
+
+/**
+ * 10. Raw recent scores (same source as the in-game .r / .rs command) filtered to one beatmap.
+ * Returns newest first. Each item is the raw osu! API v2 score object.
+ */
+export async function getRecentScoresOnBeatmap(userId, beatmapId, mode = 'osu') {
+    if (!userId || !beatmapId) return [];
+    try {
+        const recents = await fetchOsuAPI(`/users/${userId}/scores/recent`, {
+            include_fails: 0,
+            limit: 15,
+            mode: toOsuApiRuleset(mode)
+        });
+        if (!Array.isArray(recents)) return [];
+        return recents
+            .filter(s => String(s.beatmap?.id ?? s.beatmap_id) === String(beatmapId))
+            .sort((a, b) => new Date(b.ended_at || b.created_at) - new Date(a.ended_at || a.created_at));
+    } catch {
+        return [];
+    }
+}

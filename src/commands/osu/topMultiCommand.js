@@ -2,8 +2,10 @@ import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentTy
 import { 
     getTopDailyPeakPlayers, 
     getTopWeeklyPeakPlayers, 
-    getTopMonthlyPeakPlayers 
+    getTopMonthlyPeakPlayers,
+    syncTodayOfficialPP
 } from '../../services/osu/dailyLeaderboardService.js';
+import { normalizeGameMode } from '../../services/osu/matchEvaluatorService.js';
 
 const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
@@ -33,7 +35,8 @@ function formatLeaderboardSection(players, isCompact = false) {
     return players.map((p, idx) => {
         const medal = MEDALS[idx] || `**#${idx + 1}**`;
         const userLink = formatUserLink(p.username, p.userId);
-        const ppText = `**${p.pp} PP**`;
+        const modeShort = p.mode ? normalizeGameMode(p.mode) : 'std';
+        const ppText = `**${p.pp} PP** \`[${modeShort}]\``;
 
         if (isCompact) {
             return `${medal} ${userLink} — ${ppText}`;
@@ -47,7 +50,14 @@ function formatLeaderboardSection(players, isCompact = false) {
             : (p.mod && p.mod !== 'NM' ? [p.mod] : []);
         const modsStr = modsArr.length > 0 ? ` **+${modsArr.join('')}**` : '';
         const starStr = starNum ? `  \`⭐ ${starNum}★\`` : '';
-        const mapInfo = `\n┗ 🎵 *${mapTitleStr}*${modsStr}${starStr}`;
+
+        // 🔗 Link Beatmap trực tiếp trên osu! web
+        const mapUrl = p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null;
+        const mapTitleFormatted = mapUrl
+            ? `[**${mapTitleStr}**](<${mapUrl}>)`
+            : `*${mapTitleStr}*`;
+
+        const mapInfo = `\n┗ 🎵 ${mapTitleFormatted}${modsStr}${starStr}`;
 
         return `${medal} ${userLink} — ${ppText}${mapInfo}`;
     }).join('\n\n');
@@ -145,6 +155,8 @@ function createTopMultiButtons(activeMode = 'all', disabled = false) {
 
 export async function handleTopMultiCommand(message) {
     try {
+        await syncTodayOfficialPP();
+
         const botAvatar = message.client?.user?.displayAvatarURL() || null;
         let activeMode = 'all';
         const embed = createTopMultiEmbed(activeMode, botAvatar);

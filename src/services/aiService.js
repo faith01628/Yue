@@ -181,6 +181,7 @@ export async function askYue(
         let attempts = 0;
         const maxAttempts = Math.max(apiKeys.length, 1);
         let lastErr = null;
+        let overloadRetries = 0;
 
         while (attempts < maxAttempts) {
             const usedKeyIndex = currentKeyIndex;
@@ -200,6 +201,14 @@ export async function askYue(
             } catch (err) {
                 lastErr = err;
                 attempts++;
+                const isOverload = [500, 502, 503, 504].includes(err.status) || /\b50[0234]\b|overload|high demand|Service Unavailable/i.test(err.message || '');
+                if (isOverload && overloadRetries < 3) {
+                    overloadRetries++;
+                    attempts--;
+                    console.warn(`⚠️ [Yue AI] Gemini quá tải (${err.status || 'overload'}). Thử lại lần ${overloadRetries}/3...`);
+                    await new Promise(r => setTimeout(r, 1000 * overloadRetries));
+                    continue;
+                }
                 const isKeyError = err.status === 403 || err.status === 429 || err.status === 401 || (err.message && (err.message.includes('403') || err.message.includes('429') || err.message.includes('Forbidden')));
                 if (isKeyError && attempts < maxAttempts) {
                     console.warn(`⚠️ [Yue AI] Key index ${usedKeyIndex} bị lỗi (${err.status || err.message}). Tự động thử Key tiếp theo (${attempts}/${maxAttempts})...`);
@@ -281,8 +290,9 @@ export async function askYue(
 
     } catch (error) {
         console.error("❌ Lỗi AI Service:", error.message);
+        import('../domains/shared/logger/adminDebugLogger.js').then(m => m.sendAdminDebugLog('WARN', 'Lỗi AI Service (Gemini)', error.message, { stack: error.stack })).catch(() => {});
         return isIngame
-            ? `{"reply": "Hình như tui bị lag rồi, phiền ông gõ lại nhé!", "command": ""}`
+            ? `{"reply": "Looks like I'm lagging, please try again!", "command": ""}`
             : "Hình như tui bị lag rồi, phiền ông gõ lại nhé!";
     }
 }
@@ -435,6 +445,7 @@ export async function askYueWithVision(
         let attempts = 0;
         const maxAttempts = Math.max(apiKeys.length, 1);
         let lastErr = null;
+        let overloadRetries = 0;
 
         while (attempts < maxAttempts) {
             const usedKeyIndex = currentKeyIndex;
@@ -446,6 +457,14 @@ export async function askYueWithVision(
             } catch (err) {
                 lastErr = err;
                 attempts++;
+                const isOverload = [500, 502, 503, 504].includes(err.status) || /\b50[0234]\b|overload|high demand|Service Unavailable/i.test(err.message || '');
+                if (isOverload && overloadRetries < 3) {
+                    overloadRetries++;
+                    attempts--;
+                    console.warn(`⚠️ [Yue AI] Gemini quá tải (${err.status || 'overload'}). Thử lại lần ${overloadRetries}/3...`);
+                    await new Promise(r => setTimeout(r, 1000 * overloadRetries));
+                    continue;
+                }
                 const isKeyError = err.status === 403 || err.status === 429 || err.status === 401 || (err.message && (err.message.includes('403') || err.message.includes('429') || err.message.includes('Forbidden')));
                 if (isKeyError && attempts < maxAttempts) {
                     console.warn(`⚠️ [Yue AI Vision] Key index ${usedKeyIndex} bị lỗi (${err.status || err.message}). Tự động thử Key tiếp theo (${attempts}/${maxAttempts})...`);

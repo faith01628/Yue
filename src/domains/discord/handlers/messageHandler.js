@@ -58,6 +58,10 @@ export function registerMessageHandler(client) {
             const args = content.split(/ +/).slice(1);
             return await handleSetupLeaderboardBoardCommand(message, args);
         }
+        if (['.topdaily', '!topdaily', '.dailyboard', '!dailyboard', '.testdaily', '!testdaily'].includes(firstWord)) {
+            const { postDailyTop10ToDiscord } = await import('../../../services/osu/dailyLeaderboardService.js');
+            return await postDailyTop10ToDiscord(client, null, message.channel.id);
+        }
         if (['.historyboard', '.historylb', '.lbrecord', '!historyboard'].includes(firstWord)) {
             const args = content.split(/ +/).slice(1);
             return await handleHistoryLeaderboardCommand(message, args);

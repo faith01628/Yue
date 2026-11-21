@@ -165,6 +165,7 @@ export async function recreate247Room(oldMatchId, banchoClient) {
 
         if (!client || typeof client.isConnected !== 'function' || !client.isConnected()) {
             console.error('[24/7 Auto-Recreate Error]: Bancho IRC hiện tại đang mất kết nối! Giữ lại config DB để tự động thử lại ở chu kỳ sau.');
+            sendAdminDebugLog('ERROR', 'Không thể tạo lại phòng 24/7: Bancho IRC mất kết nối', `Phòng ${oldKey} chưa được tạo lại vì Bancho IRC không kết nối được. Sẽ tự thử lại ở chu kỳ sau.`, { matchId: oldKey });
             return null;
         }
 
@@ -526,6 +527,7 @@ export function start247KeepAliveLoop(banchoClient) {
             }
         } catch (err) {
             console.error('[24/7 Keep-Alive Error]:', err.message);
+            sendAdminDebugLog('ERROR', 'Lỗi vòng lặp Keep-Alive phòng 24/7', err.message, { stack: err.stack });
         }
     }, 60 * 1000); // Check mỗi 1 phút
 }

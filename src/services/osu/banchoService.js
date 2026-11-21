@@ -22,6 +22,7 @@ import { getRoomLanguage, t } from '../multi247/multilingualService.js';
 import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247Room, start247KeepAliveLoop, touch247RoomActivity, recreate247Room } from '../multi247/room247Manager.js';
 import { recordRoomMatch, handleMatchEvaluationCommand, generateMatchSummaryCommentary } from './matchEvaluatorService.js';
 import { recordMatchDailyPeakPP, formatDailyLeaderboardIRC } from './dailyLeaderboardService.js';
+import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 
 const { BanchoClient } = banchojs;
 
@@ -35,6 +36,7 @@ const bancho = new BanchoClient({
 // Tránh lỗi DNS resolution (getaddrinfo EAI_AGAIN osu.ppy.sh / irc.ppy.sh) làm bùng phát Uncaught Exception
 bancho.on('error', (err) => {
     console.error('❌ [Bancho IRC Error]:', err?.message || err);
+    sendAdminDebugLog('ERROR', 'Bancho IRC Error', err?.message || String(err), { stack: err?.stack });
     if (bancho && typeof bancho.isConnected === 'function' && !bancho.isConnected()) {
         isConnected = false;
         connectPromise = null;
@@ -255,6 +257,9 @@ export async function forceJoinLobby(matchId, retries = 3) {
             return true;
         } catch (err) {
             console.error(`⚠️ Lỗi khi force join ${channelName} (thử lần ${attempt}/${retries}):`, err.message || err);
+            if (attempt >= retries) {
+                sendAdminDebugLog('ERROR', `Không thể rejoin phòng ${channelName}`, err.message || String(err), { matchId, stack: err?.stack });
+            }
             if (attempt < retries) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
             } else {
@@ -263,7 +268,7 @@ export async function forceJoinLobby(matchId, retries = 3) {
                 if (isNoSuchChannel) {
                     if (is247CommunityRoom(matchId)) {
                         console.log(`🔄 [Bancho IRC] Phòng 24/7 ${matchId} đã bị Bancho tự đóng. Tiến hành tự động tái tạo phòng 24/7 mới...`);
-                        recreate247Room(matchId, bancho).catch(e => console.error('[recreate247Room Async Error]:', e.message));
+                        recreate247Room(matchId, bancho).catch(e => { console.error('[recreate247Room Async Error]:', e.message); sendAdminDebugLog('ERROR', `Tái tạo phòng 24/7 thất bại (${matchId})`, e.message, { matchId, stack: e.stack }); });
                     } else {
                         unregister247Room(matchId);
                         console.log(`ℹ️ [Bancho IRC] Đã tự động dọn dẹp phòng ${matchId} khỏi DB vì phòng đã thực sự bị xóa trên Bancho.`);
@@ -312,6 +317,7 @@ export async function initBancho() {
                 bancho.on('CM', handleInGameChat);
                 bancho.on('disconnected', (err) => {
                     console.warn('⚠️ [Bancho IRC] Đã ngắt kết nối khỏi Bancho IRC:', err?.message || 'Disconnected');
+                    sendAdminDebugLog('WARN', 'Bancho IRC bị ngắt kết nối', err?.message || 'Disconnected');
                     isConnected = false;
                     connectPromise = null;
                 });
@@ -348,6 +354,7 @@ export async function initBancho() {
             isConnected = false;
             connectPromise = null;
             console.error('❌ Lỗi kết nối Bancho IRC:', err.message || err);
+            sendAdminDebugLog('ERROR', 'Không thể kết nối Bancho IRC', err.message || String(err), { stack: err?.stack });
             return bancho;
         }
     })();
@@ -540,32 +547,46 @@ async function handleInGameChat(message) {
                 // 🎯 TỰ ĐỘNG GHI NHỚ TRẬN ĐẤU VỪA HOÀN THÀNH VÀO BỘ NHỚ RAM & BÌNH LUẬN TRẬN ĐẤU & BẢNG XẾP HẠNG NGÀY
                 setTimeout(async () => {
                     try {
-                        const matchSummary = await recordRoomMatch(matchId, channelName);
-                        if (matchSummary) {
+                        let matchSummary = await recordRoomMatch(matchId, channelName);
+                        // Retry nếu osu! API chưa kịp cập nhật điểm trận đấu vừa xong
+                        if (!matchSummary || !matchSummary.scores || matchSummary.scores.length === 0) {
+                            console.log(`[Bancho Match] ⏳ Match ID ${matchId} chưa có điểm số ngay, chờ 1.5s để thử lại...`);
+                            await new Promise(r => setTimeout(r, 1500));
+                            matchSummary = await recordRoomMatch(matchId, channelName);
+                        }
+
+                        if (matchSummary && matchSummary.scores && matchSummary.scores.length > 0) {
+                            // ⚡ Chạy SONG SONG việc tạo câu bình luận AI và việc tính/kiểm tra .rs Peak PP để không chặn nhau
+                            const commentaryPromise = (botConfig.osuMultiplayer?.aiMatchCommentary !== false)
+                                ? generateMatchSummaryCommentary(matchSummary).catch(() => null)
+                                : Promise.resolve(null);
+
                             // 🏆 Ghi nhận Peak PP Ngày cho từng người chơi
                             await recordMatchDailyPeakPP(matchSummary);
 
-                            // 💬 Gửi bình luận MVP/Choke
-                            if (botConfig.osuMultiplayer?.aiMatchCommentary !== false) {
-                                const commentary = await generateMatchSummaryCommentary(matchSummary);
-                                if (commentary) {
-                                    await channel.sendMessage(commentary);
-                                    await new Promise(r => setTimeout(r, 600));
-                                }
-                            }
-
-                            // 📊 Gửi Bảng Xếp Hạng Top 5 Peak PP Ngày
+                            // 📊 Ưu tiên gửi Bảng Xếp Hạng Top 5 Peak PP Ngày NGAY LẬP TỨC sau khi tính xong
                             if (botConfig.osuMultiplayer?.dailyLeaderboard !== false) {
                                 const lbMsg = formatDailyLeaderboardIRC(5);
                                 if (lbMsg) {
                                     await channel.sendMessage(lbMsg);
                                 }
                             }
+
+                            // 💬 Gửi bình luận MVP/Choke (đã chạy song song và có timeout 3.5s)
+                            const commentary = await commentaryPromise;
+                            if (commentary) {
+                                await new Promise(r => setTimeout(r, 400));
+                                await channel.sendMessage(commentary);
+                            }
+                        } else {
+                            console.warn(`[Bancho Match] ⚠️ Không lấy được điểm số của Match ID ${matchId} sau khi thử lại.`);
+                            sendAdminDebugLog('WARN', 'Không lấy được điểm số trận đấu', `Match ${matchId} không có dữ liệu điểm sau khi retry (kiểm tra log "Lỗi ghi nhận trận đấu").`, { matchId });
                         }
                     } catch (mErr) {
                         console.error('[MatchEvaluator AutoRecord Error]:', mErr.message);
+                        sendAdminDebugLog('ERROR', 'Lỗi ghi nhận điểm / bảng xếp hạng sau trận', mErr.message, { matchId, stack: mErr.stack });
                     }
-                }, 1500);
+                }, 1200);
 
                 if (is247CommunityRoom(matchId) && !isAutohostOn(channelName)) {
                     enableAutohostForChannel(channel);
@@ -580,6 +601,7 @@ async function handleInGameChat(message) {
                             await rotateToNextHost(channel);
                         } catch (rotErr) {
                             console.error('[Autohost Rotate Error]:', rotErr.message);
+                            sendAdminDebugLog('ERROR', 'Lỗi xoay host Autohost', rotErr.message, { matchId, stack: rotErr.stack });
                         } finally {
                             isRotatingMap.set(channelName, false);
                         }
@@ -638,6 +660,7 @@ async function handleInGameChat(message) {
 
     } catch (globalErr) {
         console.error('💥 Lỗi toàn cục handleInGameChat:', globalErr.message);
+        sendAdminDebugLog('ERROR', 'Lỗi toàn cục handleInGameChat', globalErr.message, { stack: globalErr.stack });
     }
 }
 

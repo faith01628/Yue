@@ -2,6 +2,7 @@ import { getMatchDetails, getUserProfile, getBeatmapDetail, getUserRecentPlay } 
 import { askYue } from '../aiService.js';
 import { botConfig } from '../../config/botConfig.js';
 import { normalizeMods } from './dailyLeaderboardService.js';
+import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 
 
 
@@ -32,11 +33,31 @@ function estimateComfortableSR(pp, globalRank) {
 }
 
 /**
+ * Chuẩn hóa Game Mode sang định dạng ngắn cộng đồng osu! (std, taiko, catch, mania)
+ */
+export function normalizeGameMode(rawMode) {
+    if (rawMode === undefined || rawMode === null) return 'std';
+    if (typeof rawMode === 'number') {
+        switch (rawMode) {
+            case 1: return 'taiko';
+            case 2: return 'catch';
+            case 3: return 'mania';
+            default: return 'std';
+        }
+    }
+    const str = String(rawMode).toLowerCase().trim();
+    if (str === '1' || str === 'taiko') return 'taiko';
+    if (str === '2' || str === 'fruits' || str === 'catch' || str === 'ctb') return 'catch';
+    if (str === '3' || str === 'mania') return 'mania';
+    return 'std';
+}
+
+/**
  * 1. Ghi nhận và lưu thông tin trận đấu vừa hoàn thành từ osu! API
  */
 export async function recordRoomMatch(matchId, channelName = null) {
     if (!matchId) return null;
-    
+
     try {
         const rawMatch = await getMatchDetails(matchId);
         if (!rawMatch) return null;
@@ -44,17 +65,38 @@ export async function recordRoomMatch(matchId, channelName = null) {
         // Trích xuất trận đấu cuối cùng trong danh sách events / games
         let lastGame = null;
         if (rawMatch.events && Array.isArray(rawMatch.events)) {
-            // Lọc các event loại 'game'
-            const gameEvents = rawMatch.events.filter(e => e.detail && e.detail.type === 'other' || e.game);
-            if (gameEvents.length > 0) {
-                const latestEvent = gameEvents[gameEvents.length - 1];
-                lastGame = latestEvent.game || latestEvent;
+            // Tìm event game mới nhất có dữ liệu scores thực tế (bỏ qua các event chat/host change/settings/other)
+            for (let i = rawMatch.events.length - 1; i >= 0; i--) {
+                const ev = rawMatch.events[i];
+                if (ev.game && Array.isArray(ev.game.scores) && ev.game.scores.length > 0) {
+                    lastGame = ev.game;
+                    break;
+                }
+            }
+            // Fallback: nếu chưa có game nào có scores, lấy game mới nhất có object game
+            if (!lastGame) {
+                for (let i = rawMatch.events.length - 1; i >= 0; i--) {
+                    const ev = rawMatch.events[i];
+                    if (ev.game) {
+                        lastGame = ev.game;
+                        break;
+                    }
+                }
             }
         }
-        
+
         // Fallback v1 API structure
         if (!lastGame && rawMatch.games && Array.isArray(rawMatch.games)) {
-            lastGame = rawMatch.games[rawMatch.games.length - 1];
+            for (let i = rawMatch.games.length - 1; i >= 0; i--) {
+                const g = rawMatch.games[i];
+                if (Array.isArray(g.scores) && g.scores.length > 0) {
+                    lastGame = g;
+                    break;
+                }
+            }
+            if (!lastGame && rawMatch.games.length > 0) {
+                lastGame = rawMatch.games[rawMatch.games.length - 1];
+            }
         }
 
         if (!lastGame) {
@@ -62,12 +104,17 @@ export async function recordRoomMatch(matchId, channelName = null) {
             return null;
         }
 
-        // Thông tin Beatmap
+        // Thông tin Beatmap (Đảm bảo có đầy đủ beatmapset, title và difficulty_rating)
         const beatmapId = lastGame.beatmap_id || lastGame.beatmap?.id;
         let beatmapInfo = lastGame.beatmap || null;
-        if (!beatmapInfo && beatmapId) {
-            beatmapInfo = await getBeatmapDetail(beatmapId);
+        if ((!beatmapInfo || !beatmapInfo.beatmapset || !beatmapInfo.difficulty_rating) && beatmapId) {
+            const fullDetail = await getBeatmapDetail(beatmapId);
+            if (fullDetail) beatmapInfo = fullDetail;
         }
+
+        // Xác định Game Mode của trận đấu
+        const rawGameMode = lastGame.mode ?? (lastGame.mode_int !== undefined ? lastGame.mode_int : null) ?? beatmapInfo?.mode ?? 'osu';
+        const gameMode = normalizeGameMode(rawGameMode);
 
         // Xây dựng Bảng ánh xạ User ID -> Real Username từ API Match Data
         const userMap = new Map();
@@ -88,28 +135,32 @@ export async function recordRoomMatch(matchId, channelName = null) {
             const userId = s.user_id || s.user?.id;
             const username = s.user?.username || userMap.get(String(userId)) || `User_${userId}`;
             const totalScore = parseInt(s.score || 0);
-            
-            // Xử lý Accuracy
+
+            // Xử lý Accuracy & Hit Statistics (tương thích cả osu! API v1, v2 và Lazer statistics)
+            const c300 = parseInt(s.count300 ?? s.statistics?.count_300 ?? s.statistics?.great ?? 0) || 0;
+            const c100 = parseInt(s.count100 ?? s.statistics?.count_100 ?? s.statistics?.ok ?? 0) || 0;
+            const c50 = parseInt(s.count50 ?? s.statistics?.count_50 ?? s.statistics?.meh ?? 0) || 0;
+            const cMiss = parseInt(s.countmiss ?? s.statistics?.count_miss ?? s.statistics?.miss ?? 0) || 0;
+            const cKatu = parseInt(s.countkatu ?? s.statistics?.count_katu ?? s.statistics?.good ?? 0) || 0;
+            const cGeki = parseInt(s.countgeki ?? s.statistics?.count_geki ?? s.statistics?.perfect ?? 0) || 0;
             let acc = 0;
             if (s.accuracy !== undefined && s.accuracy !== null) {
                 acc = s.accuracy > 1 ? s.accuracy : s.accuracy * 100;
             } else {
-                const c300 = parseInt(s.count300 || s.statistics?.count_300 || 0);
-                const c100 = parseInt(s.count100 || s.statistics?.count_100 || 0);
-                const c50 = parseInt(s.count50 || s.statistics?.count_50 || 0);
-                const cMiss = parseInt(s.countmiss || s.statistics?.count_miss || 0);
                 const totalHits = c300 + c100 + c50 + cMiss;
                 if (totalHits > 0) {
                     acc = ((c300 * 300 + c100 * 100 + c50 * 50) / (totalHits * 300)) * 100;
                 }
             }
 
-            const misses = parseInt(s.countmiss ?? s.statistics?.count_miss ?? 0);
-            const maxcombo = parseInt(s.maxcombo ?? s.max_combo ?? 0);
+            const misses = cMiss;
+            const maxcombo = parseInt(s.maxcombo ?? s.max_combo ?? 0) || 0;
 
-            // Xử lý Pass/Fail chuẩn cho cả API v1 (pass: "1"/"0") và API v2 (passed: true/false, rank: "F")
+            // Xử lý Pass/Fail chuẩn cho cả API v1 (pass: "1"/"0") và API v2 (s.match.pass, passed: true/false, rank: "F")
             let isPassed = false;
-            if (s.passed !== undefined && s.passed !== null) {
+            if (s.match?.pass !== undefined && s.match?.pass !== null) {
+                isPassed = (s.match.pass === true || s.match.pass === 1 || s.match.pass === '1');
+            } else if (s.passed !== undefined && s.passed !== null) {
                 isPassed = (s.passed === true || s.passed === 1 || s.passed === '1');
             } else if (s.pass !== undefined && s.pass !== null) {
                 isPassed = (s.pass === true || s.pass === 1 || s.pass === '1');
@@ -128,6 +179,7 @@ export async function recordRoomMatch(matchId, channelName = null) {
 
             const scoreMods = s.mods !== undefined ? s.mods : (s.enabled_mods !== undefined ? s.enabled_mods : (s.enabledMods || []));
             const mergedMods = normalizeMods([gameMods, scoreMods]);
+            const scoreMode = normalizeGameMode(s.mode ?? (s.mode_int !== undefined ? s.mode_int : null) ?? gameMode);
 
             processedScores.push({
                 userId,
@@ -138,7 +190,18 @@ export async function recordRoomMatch(matchId, channelName = null) {
                 maxcombo,
                 passed,
                 mods: mergedMods,
-                mod: mergedMods.length > 0 ? mergedMods.join('') : 'NM'
+                mod: mergedMods.length > 0 ? mergedMods.join('') : 'NM',
+                mode: scoreMode,
+                scoreId: s.id || s.best_id || null,
+                statistics: {
+                    count_300: c300,
+                    count_100: c100,
+                    count_50: c50,
+                    count_miss: cMiss,
+                    count_katu: cKatu,
+                    count_geki: cGeki
+                },
+                pp: s.pp ? parseFloat(s.pp) : null
             });
         }
 
@@ -155,13 +218,16 @@ export async function recordRoomMatch(matchId, channelName = null) {
             matchId: String(matchId),
             channelName: channelName || `#mp_${matchId}`,
             timestamp: Date.now(),
+            gameMode,
+            mode: gameMode,
             beatmap: {
                 id: beatmapId,
                 title: beatmapInfo?.beatmapset?.title || beatmapInfo?.title || 'Unknown Title',
                 artist: beatmapInfo?.beatmapset?.artist || beatmapInfo?.artist || 'Unknown Artist',
                 version: beatmapInfo?.version || 'Normal',
                 starRating: beatmapInfo?.difficulty_rating || beatmapInfo?.star_rating || beatmapInfo?.difficultyrating || 4.0,
-                maxCombo: beatmapInfo?.max_combo || 0
+                maxCombo: beatmapInfo?.max_combo || 0,
+                mode: beatmapInfo?.mode || 'osu'
             },
             scores: processedScores
         };
@@ -182,6 +248,7 @@ export async function recordRoomMatch(matchId, channelName = null) {
         return matchSummary;
     } catch (err) {
         console.error(`❌ Lỗi ghi nhận trận đấu Match ${matchId}:`, err.message);
+        sendAdminDebugLog('ERROR', 'Lỗi ghi nhận trận đấu (recordRoomMatch)', err.message, { matchId, stack: err.stack });
         return null;
     }
 }
@@ -207,7 +274,7 @@ export async function evaluatePlayerPerformance(matchSummary, username) {
     if (!userScore) {
         return {
             foundInMatch: false,
-            message: `Không tìm thấy điểm số của ${username} trong trận vừa rồi.`
+            message: `I couldn't find a score from ${username} in the last match.`
         };
     }
 
@@ -265,7 +332,7 @@ export async function evaluatePlayerPerformance(matchSummary, username) {
  */
 export async function generateEvaluationResponse(evalData, lang = 'vi', useAI = true) {
     if (!evalData || !evalData.foundInMatch) {
-        return evalData?.message || 'Không tìm thấy dữ liệu trận đấu vừa rồi.';
+        return evalData?.message || 'No data found for the last match.';
     }
 
     const isAiEnabled = botConfig?.osuMultiplayer?.aiMatchCommentary !== false;
@@ -292,12 +359,15 @@ Evaluate the recent match performance for player "${evalData.username}" based ST
 6. Always prefix with "YUE: ".
             `.trim();
 
-            const aiRawJson = await askYue(`ingame_eval_${evalData.username}`, evalData.username, "Evaluate my match performance", null, false, {
-                matchContext: promptContext
-            });
+            const aiRawJson = await Promise.race([
+                askYue(`ingame_eval_${evalData.username}`, evalData.username, "Evaluate my match performance", null, false, {
+                    matchContext: promptContext
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('AI Eval Timeout (4s)')), 4000))
+            ]);
 
             const aiParsed = JSON.parse(aiRawJson);
-            if (aiParsed && aiParsed.reply) {
+            if (aiParsed && aiParsed.reply && !/lagging|bị lag/i.test(aiParsed.reply)) {
                 return aiParsed.reply.startsWith('YUE:') ? aiParsed.reply : `YUE: ${aiParsed.reply}`;
             }
         } catch (aiErr) {
@@ -386,17 +456,11 @@ export async function handleMatchEvaluationCommand(channel, senderUsername, user
     const matchId = channelName.replace('#mp_', '');
     const cleanSender = formatCleanUsername(senderUsername);
 
-    // Check if user prompt is in Vietnamese
-    const hasVietnamese = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(userPrompt);
-    const lang = hasVietnamese ? 'vi' : 'en';
+    // In-game replies are always English
+    const lang = 'en';
 
-    // ⚡ BƯỚC 1: Phản hồi tức thì (0ms latency) - Chờ xíu kiểm tra phát
-    const ackMessages = lang === 'vi' ? [
-        `YUE: Chờ tôi xíu để tôi kiểm tra phát... 📊`,
-        `YUE: Chờ tui xíu để tui kiểm tra phát nha! 📊`,
-        `YUE: Đợi tí tui check kết quả trận vừa rồi của ${cleanSender} nè... 🧐`,
-        `YUE: Ê từ từ để tui xem điểm số trận vừa rồi của ${cleanSender} nhé! 🍳`
-    ] : [
+    // ⚡ STEP 1: Instant acknowledgement
+    const ackMessages = [
         `YUE: Checking match results for ${cleanSender}... 📊`,
         `YUE: Hold on, reviewing stats for ${cleanSender}... 🧐`,
         `YUE: Let me check the latest score for ${cleanSender}... 🍳`
@@ -411,37 +475,34 @@ export async function handleMatchEvaluationCommand(channel, senderUsername, user
     // Strip command prefixes (.yue, !yue, .match, .rs, etc.)
     const cleanPrompt = userPrompt.replace(/^[\.!](yue|match|danhgia|review|rs|r)\s*/i, '').trim();
 
-    // Xác định người chơi cần đánh giá (Mặc định là người gửi lệnh, trừ khi chỉ định tên username cụ thể)
-    let targetPlayer = cleanSender;
-
-    const conversationalWords = new Set([
-        'thấy', 'thay', 'sao', 'thế', 'the', 'nào', 'nao', 'vừa', 'vua', 'rồi', 'roi', 'trận', 'tran',
-        'điểm', 'diem', 'số', 'so', 'tui', 'tôi', 'toi', 'mình', 'minh', 'của', 'cua', 'không', 'khong',
-        'ý', 'y', 'là', 'la', 'xem', 'soi', 'cook', 'đánh', 'danh', 'chơi', 'choi', 'phong', 'độ', 'do',
-        'review', 'thể', 'the', 'hiện', 'hien', 'kết', 'ket', 'quả', 'qua', 'cho', 'với', 'voi', 'bạn', 'ban',
-        'gì', 'gi', 'kìa', 'kia', 'yue', 'nhé', 'nha', 'thì', 'thi', 'vẫn', 'van', 'đó', 'do', 'được', 'duoc',
-        'đấy', 'day', 'này', 'nay', 'map', 'bài', 'bai', 'rs', 'r', 'match', 'danhgia'
-    ]);
-
-    const promptParts = cleanPrompt.split(/ +/);
-    for (const part of promptParts) {
-        const rawLower = part.toLowerCase().trim();
-        const cleanLower = rawLower.replace(/[^\p{L}\p{N}_\[\]\-]/gu, '');
-        if (cleanLower && !conversationalWords.has(rawLower) && !conversationalWords.has(cleanLower) && !cleanLower.startsWith('.') && !cleanLower.startsWith('!') && cleanLower.length >= 2) {
-            targetPlayer = formatCleanUsername(part.trim());
-            break;
-        }
-    }
-
-    if (!targetPlayer || targetPlayer.startsWith('.') || targetPlayer.startsWith('!')) {
-        targetPlayer = cleanSender;
-    }
-
-    // 🔍 BƯỚC 2: Tìm dữ liệu trận đấu (Ưu tiên Match Room RAM -> osu! API Match -> Fallback Recent Play)
+    // 🔍 STEP 2: Find match data (RAM -> osu! API match)
     let matchSummary = getLatestRoomMatch(matchId) || getLatestRoomMatch(channelName);
-
     if (!matchSummary) {
         matchSummary = await recordRoomMatch(matchId, channelName);
+    }
+
+    // 🎯 Resolve target player. Default = sender. Only switch when the prompt names
+    // a real player in the match/room, or is an explicit "<cmd> <name>" form.
+    let targetPlayer = cleanSender;
+    const roomPlayerNames = new Set((matchSummary?.scores || []).map(sc => formatCleanUsername(sc.username).toLowerCase()));
+    try {
+        for (const sl of (channel.lobby?.slots || [])) {
+            if (sl && sl.user?.username) roomPlayerNames.add(formatCleanUsername(sl.user.username).toLowerCase());
+        }
+    } catch { /* ignore */ }
+
+    const selfWords = new Set(['tôi', 'toi', 'tui', 'mình', 'minh', 'me', 'my', 'i', 'mine']);
+    const tokens = cleanPrompt.split(/ +/).map(p => p.trim()).filter(Boolean);
+    const hasSelfRef = tokens.some(p => selfWords.has(p.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')));
+    const mentioned = tokens
+        .map(p => formatCleanUsername(p.replace(/^@/, '').replace(/[.,!?;:]+$/, '')))
+        .find(p => p.length >= 2 && roomPlayerNames.has(p.toLowerCase()));
+
+    if (mentioned && !hasSelfRef) {
+        targetPlayer = mentioned;
+    } else if (!hasSelfRef && /^[\.!](rs|r|match|danhgia|review)\b/i.test(userPrompt.trim()) && tokens.length === 1 && /^[\w\[\]\-]{2,15}$/.test(tokens[0])) {
+        // Explicit ".rs <username>" form (player may not be in the room)
+        targetPlayer = formatCleanUsername(tokens[0]);
     }
 
     const hasTargetInMatch = matchSummary?.scores?.some(s => formatCleanUsername(s.username).toLowerCase() === targetPlayer.toLowerCase());
@@ -495,7 +556,7 @@ export async function handleMatchEvaluationCommand(channel, senderUsername, user
     }
 
     if (!matchSummary || !matchSummary.scores || matchSummary.scores.length === 0) {
-        return await channel.sendMessage(`YUE: Tui chưa tìm thấy dữ liệu điểm số mới nhất của ${targetPlayer}. Hãy hoàn thành 1 map để Yue đánh giá nhé!`);
+        return await channel.sendMessage(`YUE: I couldn't find any recent score for ${targetPlayer}. Finish a map and ask me again!`);
     }
 
     // 📊 BƯỚC 3: Trả về dòng điểm số chuẩn (Chỉ gửi nếu showScoreLine được bật)
@@ -503,8 +564,8 @@ export async function handleMatchEvaluationCommand(channel, senderUsername, user
         const userScore = matchSummary.scores.find(s => formatCleanUsername(s.username).toLowerCase() === targetPlayer.toLowerCase()) || matchSummary.scores[0];
         const displayUsername = formatCleanUsername(userScore.username);
         const userId = userScore.userId;
-        
-        const userProfileLink = userId 
+
+        const userProfileLink = userId
             ? `[https://osu.ppy.sh/u/${userId} ${displayUsername}]`
             : `[https://osu.ppy.sh/u/${encodeURIComponent(displayUsername)} ${displayUsername}]`;
 
@@ -573,12 +634,15 @@ Rules:
 4. Keep it under 180 characters.
             `.trim();
 
-            const aiRawJson = await askYue(`ingame_summary_${matchSummary.matchId}`, "MatchReferee", "Summarize match MVP and choke", null, false, {
-                matchContext: promptContext
-            });
+            const aiRawJson = await Promise.race([
+                askYue(`ingame_summary_${matchSummary.matchId}`, "MatchReferee", "Summarize match MVP and choke", null, false, {
+                    matchContext: promptContext
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('AI Summary Timeout (3.5s)')), 3500))
+            ]);
 
             const aiParsed = JSON.parse(aiRawJson);
-            if (aiParsed && aiParsed.reply) {
+            if (aiParsed && aiParsed.reply && !/lagging|bị lag/i.test(aiParsed.reply)) {
                 return aiParsed.reply.startsWith('YUE:') ? aiParsed.reply : `YUE: ${aiParsed.reply}`;
             }
         } catch (aiErr) {
