@@ -1,10 +1,13 @@
+import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
+import { is247CommunityRoom } from '../../services/multi247/room247Manager.js';
+
 export async function handleInGameHelp(channel) {
-    const helpLines = [
-        "YUE HELP (1/4) - MAP: .rnd [sao] [phút] [status] | .a [user] (Duyệt) | .dl (Link) | .abort | .time <s giây>",
-        "YUE HELP (2/4) - HOST: .host <user> | .ah (On) | .ahoff (Off) | .next / .skip (Đổi host) | .q (Hàng đợi)",
-        "YUE HELP (3/4) - PLAYER & REF: .rs [user] (Recent score) | .addref <user> | .rmref <user> | .refs",
-        "YUE HELP (4/4) - AI AGENT: .yue <câu hỏi> (Trò chuyện hoặc ra lệnh bằng ngôn ngữ tự nhiên)"
-    ];
+    const channelName = channel?.name || '';
+    const matchId = channelName.replace('#mp_', '');
+    const is247 = is247CommunityRoom(matchId);
+
+    const roomLang = await getRoomLanguage(channel);
+    const helpLines = t(is247 ? 'helpLines247' : 'helpLines', roomLang);
 
     for (let i = 0; i < helpLines.length; i++) {
         await channel.sendMessage(helpLines[i]);

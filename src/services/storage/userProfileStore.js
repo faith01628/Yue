@@ -1,45 +1,20 @@
 import fs from 'fs';
 import path from 'path';
+import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const PROFILES_FILE = path.join(DATA_DIR, 'user_profiles.json');
 
-/**
- * Đảm bảo thư mục data và file JSON tồn tại
- */
 function ensureStorageExists() {
-    if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(PROFILES_FILE)) {
-        fs.writeFileSync(PROFILES_FILE, JSON.stringify({}, null, 2), 'utf-8');
-    }
+    safeReadJSON(PROFILES_FILE, {});
 }
 
-/**
- * Đọc tất cả profiles từ JSON
- */
 function readAllProfiles() {
-    ensureStorageExists();
-    try {
-        const raw = fs.readFileSync(PROFILES_FILE, 'utf-8');
-        return JSON.parse(raw || '{}');
-    } catch (err) {
-        console.error('❌ Lỗi đọc file user_profiles.json:', err.message);
-        return {};
-    }
+    return safeReadJSON(PROFILES_FILE, {});
 }
 
-/**
- * Lưu tất cả profiles vào JSON
- */
 function writeAllProfiles(data) {
-    ensureStorageExists();
-    try {
-        fs.writeFileSync(PROFILES_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (err) {
-        console.error('❌ Lỗi ghi file user_profiles.json:', err.message);
-    }
+    return safeWriteJSON(PROFILES_FILE, data);
 }
 
 /**

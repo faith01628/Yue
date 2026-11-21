@@ -5,11 +5,12 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { safeReadJSON, safeWriteJSON } from '../utils/safeStorage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const HISTORY_DIR = path.join(__dirname, '../data/chatHistory');
+const HISTORY_DIR = path.resolve('data/chatHistory');
 const MAX_HISTORY_PER_CHANNEL = 500;
 
 // Đảm bảo thư mục lưu trữ tồn tại
@@ -27,20 +28,9 @@ function getChannelFilePath(channelId) {
  */
 export function getLocalChannelHistory(channelId, maxCount = MAX_HISTORY_PER_CHANNEL) {
     if (!channelId) return [];
-
     const filePath = getChannelFilePath(channelId);
-    if (!fs.existsSync(filePath)) {
-        return [];
-    }
-
-    try {
-        const rawData = fs.readFileSync(filePath, 'utf-8');
-        const history = JSON.parse(rawData);
-        return Array.isArray(history) ? history.slice(-maxCount) : [];
-    } catch (err) {
-        console.error(`❌ Lỗi đọc file lịch sử kênh ${channelId}:`, err.message);
-        return [];
-    }
+    const history = safeReadJSON(filePath, []);
+    return Array.isArray(history) ? history.slice(-maxCount) : [];
 }
 
 /**
@@ -76,11 +66,7 @@ export function saveMessageToLocalHistory(channelId, msgData) {
         history = history.slice(-MAX_HISTORY_PER_CHANNEL);
     }
 
-    try {
-        fs.writeFileSync(filePath, JSON.stringify(history, null, 2), 'utf-8');
-    } catch (err) {
-        console.error(`❌ Lỗi ghi file lịch sử kênh ${channelId}:`, err.message);
-    }
+    safeWriteJSON(filePath, history);
 }
 
 /**

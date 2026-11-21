@@ -350,7 +350,9 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         // 🎯 Build Params chuẩn cho rosu-pp-js
         const perfParams = {};
 
-        if (options.mods) perfParams.mods = options.mods;
+        if (options.mods !== undefined && options.mods !== null) {
+            perfParams.mods = Array.isArray(options.mods) ? options.mods.join('') : options.mods;
+        }
         if (options.misses !== undefined) perfParams.misses = options.misses;
 
         // Nếu truyền n100 và n50
@@ -366,6 +368,34 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         const calculator = new rosu.Performance(perfParams);
         const result = calculator.calculate(map);
 
+        // 🌟 Nếu Mod có chứa Relax (RX) hoặc AutoPilot (AP):
+        // rosu-pp sẽ tính stars của skill RX/AP bị giảm mạnh (ví dụ từ 9.76★ xuống 5.06★).
+        // Để giữ đúng Star Rating hiển thị thực tế của Map (như khi đánh DT/HR), ta tính thêm difficulty không có RX/AP.
+        const rawModsStr = String(perfParams.mods || '');
+        if (/RX|Relax|AP|Autopilot/i.test(rawModsStr)) {
+            const modsWithoutRxAp = rawModsStr
+                .replace(/RX|Relax|AP|Autopilot/gi, '')
+                .trim();
+
+            try {
+                const pureCalc = new rosu.Performance({
+                    ...perfParams,
+                    mods: modsWithoutRxAp
+                });
+                const pureRes = pureCalc.calculate(map);
+                const pureStars = pureRes.difficulty?.stars ?? pureRes.stars;
+
+                if (typeof pureStars === 'number' && !isNaN(pureStars) && pureStars > 0) {
+                    if (result.difficulty) {
+                        result.difficulty.stars = pureStars;
+                    }
+                    result.stars = pureStars;
+                }
+            } catch (pErr) {
+                console.warn('[rosu-pp] Lỗi tính Pure Star Rating không có RX/AP:', pErr.message);
+            }
+        }
+
         map.free();
         return result;
     } catch (error) {
@@ -373,3 +403,33 @@ export async function calculateBeatmapPP(beatmapId, options = {}) {
         return null;
     }
 }
+
+/**
+ * 8. Lấy thông tin Match Multiplayer từ osu! API v2
+ */
+export async function getMatchDetails(matchId) {
+    if (!matchId) return null;
+    const numId = Number(matchId);
+    try {
+        const matchData = await fetchOsuAPI(`/matches/${numId}`);
+        return matchData;
+    } catch (error) {
+        console.error(`❌ Lỗi lấy Match Details cho ID ${matchId}:`, error.response?.data || error.message);
+        
+        // Fallback thử với osu! API v1 nếu v2 lỗi
+        try {
+            const apiKey = process.env.OSU_API_KEY;
+            if (apiKey) {
+                const res = await axios.get(`https://osu.ppy.sh/api/get_match`, {
+                    params: { k: apiKey, mp: numId }
+                });
+                if (res.data && res.data.match) {
+                    return res.data;
+                }
+            }
+        } catch (v1Err) {
+            console.error(`❌ Fallback API v1 get_match cũng thất bại cho ID ${matchId}:`, v1Err.message);
+        }
+        return null;
+    }
+}

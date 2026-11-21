@@ -1,4 +1,5 @@
 import { getUserRecentPlay } from '../../services/osu/osuService.js';
+import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
 
 /**
  * Hàm đọc chuỗi Mods ngắn gọn
@@ -20,6 +21,7 @@ function formatShortTitle(title, maxLength = 35) {
 
 export async function handlePlayerCommands(channel, message, args, command) {
     const sender = message.user?.username || 'Player';
+    const roomLang = await getRoomLanguage(channel);
 
     // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r
     if (['.rs', '!rs', '.r', '!r'].includes(command)) {
@@ -29,21 +31,27 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const data = await getUserRecentPlay(targetUser);
 
             if (!data || !data.score) {
-                return await channel.sendMessage(`YUE: Không tìm thấy score gần đây nào của ${targetUser}!`);
+                return await channel.sendMessage(t('rsNoScore', roomLang, targetUser));
             }
 
             const score = data.score;
             const beatmap = score.beatmap;
             const beatmapset = score.beatmapset;
 
-            // 1. Tên người chơi
+            // 1. Tên người chơi (đã bọc link profile rút gọn [https://osu.ppy.sh/u/... User])
             const displayUser = data.user?.username || targetUser;
+            const userId = data.user?.id;
+            const userProfileLink = userId 
+                ? `[https://osu.ppy.sh/u/${userId} ${displayUser}]`
+                : `[https://osu.ppy.sh/u/${encodeURIComponent(displayUser)} ${displayUser}]`;
 
-            // 🎯 2. Tên Beatmap (Chỉ lấy Tên Bài Hát, bỏ Artist/Mapper + Cắt ngắn linh hoạt nếu > 35 ký tự)
+            // 🎯 2. Tên Beatmap (Bọc link beatmap rút gọn [https://osu.ppy.sh/b/... Title])
             const rawTitle = beatmapset?.title || 'Unknown Map';
             const shortTitle = formatShortTitle(rawTitle, 35);
             const difficultyName = beatmap?.version ? `[${beatmap.version}]` : '';
-            const mapTitle = `${shortTitle} ${difficultyName}`;
+            const mapTitle = beatmap?.id 
+                ? `[https://osu.ppy.sh/b/${beatmap.id} ${shortTitle} ${difficultyName}]`
+                : `${shortTitle} ${difficultyName}`;
             
             // 3. Mods (+HRDT, +HD...)
             const modsText = parseModsText(score.mods);
@@ -82,13 +90,13 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const maxComboMapText = realMapMaxCombo ? `${realMapMaxCombo}x` : '?x';
             const comboText = `${userCombo}x/${maxComboMapText}`;
 
-            // 🎯 Chuỗi tin nhắn gọn gàng, an toàn tuyệt đối dưới 150 ký tự
-            const replyMsg = `YUE: ${displayUser} | ${mapTitle}${modsText} | Rank ${score.rank} > ${score.score.toLocaleString('en-US')} > ${ppText} | Combo: ${comboText} | Hits: ${hitsText}`;
+            // 🎯 Chuỗi tin nhắn gọn gàng kèm Profile Link rút gọn
+            const replyMsg = `YUE: ${userProfileLink} | ${mapTitle}${modsText} | Rank ${score.rank} > ${score.score.toLocaleString('en-US')} > ${ppText} | Combo: ${comboText} | Hits: ${hitsText}`;
 
             return await channel.sendMessage(replyMsg);
         } catch (err) {
             console.error('Lỗi lấy .rs in-game:', err);
-            return await channel.sendMessage(`YUE: Không lấy được score của ${targetUser} rồi!`);
+            return await channel.sendMessage(t('rsError', roomLang, targetUser));
         }
     }
 }

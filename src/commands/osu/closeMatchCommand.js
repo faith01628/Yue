@@ -1,5 +1,6 @@
 import { activeLobbies, getBanchoClient } from '../../services/osu/banchoService.js';
 import { getLinkedOsuUsername } from '../../services/osu/userService.js';
+import { unregister247Room } from '../../services/multi247/room247Manager.js';
 
 export async function handleCloseMatchCommand(message) {
     const rawArgs = message.content.trim().split(/ +/).slice(1);
@@ -72,6 +73,7 @@ export async function handleCloseMatchCommand(message) {
         }
 
         activeLobbies.delete(matchId);
+        unregister247Room(matchId);
         return message.reply(`✅ Đã đóng thành công phòng Multiplayer osu! (\`#mp_${matchId}\`)!`);
 
     } catch (err) {
