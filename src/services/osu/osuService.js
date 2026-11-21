@@ -573,8 +573,8 @@ export async function getRecentScoresOnBeatmap(userId, beatmapId, mode = 'osu') 
     if (!userId || !beatmapId) return [];
     try {
         const recents = await fetchOsuAPI(`/users/${userId}/scores/recent`, {
-            include_fails: 0,
-            limit: 15,
+            include_fails: 1,
+            limit: 25,
             mode: toOsuApiRuleset(mode)
         });
         if (!Array.isArray(recents)) return [];

@@ -409,37 +409,60 @@ export async function recordMatchDailyPeakPP(matchSummary) {
     console.log(`[Leaderboard Filter] 🔎 Đã lọc ${candidates.length}/${evaluatedPlayers.length} ứng viên cao PP nhất để kiểm tra ngầm .rs: ${candidates.map(c => `${c.cleanName}(~${c.localPp}pp)`).join(', ') || 'Không có'}`);
 
     // ==============================================================
-    // BƯỚC 3: ÂM THẦM DÙNG DỮ LIỆU .RS KIỂM TRA PP THỰC TẾ RỒI MỚI LƯU
+    // BƯỚC 3: XÁC MINH PP (.RS) HOẶC SỬ DỤNG PP TÍNH TỪ MATCH (UNRANKED / FALLBACK)
     // ==============================================================
     let updatedCount = 0;
+    const rawStatus = String(matchSummary.beatmap?.status || '').toLowerCase();
+    const isUnranked = ['graveyard', 'pending', 'wip', 'unranked', '0', '-1', '-2'].includes(rawStatus);
 
     for (const item of candidates) {
         const { scoreObj, cleanName, lowerName, scoreMode, localPp, existingRecord, existingRecordIndex } = item;
         let { modsArray, localStars } = item;
 
         if (!scoreObj.userId || !beatmapId) {
-            console.warn(`[Leaderboard Verify] ⚠️ Bỏ qua ${cleanName}: thiếu userId/beatmapId nên không thể kiểm tra .rs.`);
+            console.warn(`[Leaderboard Verify] ⚠️ Bỏ qua ${cleanName}: thiếu userId/beatmapId.`);
             continue;
         }
 
-        const verified = await verifyPlayPP(beatmapId, scoreObj, scoreMode, cleanName);
-        if (!verified) {
-            sendAdminDebugLog('WARN', 'Không xác minh được PP qua .rs, bỏ qua play', `${cleanName} trên ${beatmapTitle} (local ~${localPp}pp) - không nạp vào bảng xếp hạng.`, { matchId: matchSummary.matchId });
+        let verified = null;
+        // Chỉ cần gọi verifyPlayPP nếu map không phải unranked (vì osu! Bancho không lưu .rs cho unranked)
+        if (!isUnranked) {
+            verified = await verifyPlayPP(beatmapId, scoreObj, scoreMode, cleanName);
+        }
+
+        let realPp = 0;
+        let isVerified = false;
+        let source = isUnranked ? 'rosu-pp (unranked)' : 'rosu-pp (match fallback)';
+
+        if (verified && typeof verified.pp === 'number' && verified.pp > 0) {
+            realPp = verified.pp;
+            isVerified = true;
+            source = verified.source;
+            if (Array.isArray(verified.mods) && verified.mods.length > 0) {
+                modsArray = verified.mods;
+            }
+            if (verified.stars) {
+                localStars = verified.stars;
+            }
+
+            const diffRatio = realPp > 0 ? Math.abs(localPp - realPp) / realPp : 0;
+            console.log(`[Leaderboard .rs Check] 🎯 ${cleanName}: PP lọc cục bộ ${localPp}pp ➔ PP thực tế (.rs) ${realPp}pp [${verified.source}, sai số ${(diffRatio * 100).toFixed(2)}%]`);
+        } else {
+            // Map Unranked (osu! không lưu .rs) hoặc .rs API bị delay/lỗi mạng:
+            // Dùng PP đã tính chuẩn bằng rosu-pp từ dữ liệu trận đấu (300/100/50, combo, misses)
+            if (localPp > 0) {
+                realPp = localPp;
+                isVerified = false;
+                console.log(`[Leaderboard] ℹ️ ${isUnranked ? 'Map Unranked' : 'Không lấy được .rs kịp thời'}, áp dụng PP tính từ match cho ${cleanName}: ${realPp}pp (${source}) trên ${beatmapTitle}`);
+            }
+        }
+
+        if (!realPp || realPp <= 0) {
+            console.warn(`[Leaderboard] ⚠️ Không tính được PP cho ${cleanName} trên map ${beatmapId}.`);
             continue;
         }
 
-        const realPp = verified.pp;
-        if (Array.isArray(verified.mods) && verified.mods.length > 0) {
-            modsArray = verified.mods;
-        }
-        if (verified.stars) {
-            localStars = verified.stars;
-        }
-
-        const diffRatio = realPp > 0 ? Math.abs(localPp - realPp) / realPp : 0;
-        console.log(`[Leaderboard .rs Check] 🎯 ${cleanName}: PP lọc cục bộ ${localPp}pp ➔ PP thực tế (.rs) ${realPp}pp [${verified.source}, sai số ${(diffRatio * 100).toFixed(2)}%]`);
-
-        // 🌟 CHỈ CẬP NHẬT NẾU PP THỰC TẾ (.RS) CAO HƠN PEAK PP CŨ TRONG NGÀY
+        // 🌟 CHỈ CẬP NHẬT NẾU PP THỰC TẾ CAO HƠN PEAK PP CŨ TRONG NGÀY (hoặc bản ghi cũ chưa verified)
         const isSameMapAsStored = existingRecord && String(existingRecord.beatmapId) === String(beatmapId);
         if (!existingRecord || realPp > existingRecord.pp || (existingRecord.verified !== true && isSameMapAsStored)) {
             const modStr = modsArray.length > 0 ? modsArray.join('') : 'NM';
@@ -462,7 +485,9 @@ export async function recordMatchDailyPeakPP(matchSummary) {
                 mods: modsArray,
                 mod: modStr,
                 mode: scoreMode,
-                verified: true,
+                verified: isVerified,
+                source: source,
+                unranked: isUnranked,
                 timestamp: now,
                 date: today
             };

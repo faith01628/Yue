@@ -227,7 +227,8 @@ export async function recordRoomMatch(matchId, channelName = null) {
                 version: beatmapInfo?.version || 'Normal',
                 starRating: beatmapInfo?.difficulty_rating || beatmapInfo?.star_rating || beatmapInfo?.difficultyrating || 4.0,
                 maxCombo: beatmapInfo?.max_combo || 0,
-                mode: beatmapInfo?.mode || 'osu'
+                mode: beatmapInfo?.mode || 'osu',
+                status: beatmapInfo?.status || (beatmapInfo?.approved !== undefined ? String(beatmapInfo.approved) : 'unknown')
             },
             scores: processedScores
         };

@@ -1,4 +1,4 @@
-import { getUserRecentPlay } from '../../services/osu/osuService.js';
+import { getUserRecentPlay, calculateBeatmapPP } from '../../services/osu/osuService.js';
 import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
 
 /**
@@ -56,10 +56,6 @@ export async function handlePlayerCommands(channel, message, args, command) {
             // 3. Mods (+HRDT, +HD...)
             const modsText = parseModsText(score.mods);
 
-            // 4. PP
-            const ppVal = score.pp ? Math.round(score.pp) : 0;
-            const ppText = `${ppVal}pp`;
-
             // 5. Thống kê Hits [300/100/50/Miss]
             const stats = score.statistics || {};
             const count300 = stats.count_300 ?? stats.great ?? 0;
@@ -86,6 +82,26 @@ export async function handlePlayerCommands(channel, message, args, command) {
                     console.error('Lỗi fetch max_combo fallback:', e.message);
                 }
             }
+
+            // 4. PP (Nếu map Loved/Unranked không có PP chính thức, tính toán bằng rosu-pp)
+            let ppVal = score.pp ? Math.round(score.pp) : 0;
+            if (!ppVal && beatmap?.id) {
+                try {
+                    const acc = score.accuracy !== undefined ? (score.accuracy > 1 ? score.accuracy : score.accuracy * 100) : 0;
+                    const ppRes = await calculateBeatmapPP(beatmap.id, {
+                        accuracy: acc,
+                        misses: countmiss,
+                        combo: userCombo,
+                        n300: count300,
+                        n100: count100,
+                        n50: count50,
+                        mods: score.mods,
+                        mode: score.mode || 'osu'
+                    });
+                    if (ppRes?.pp > 0) ppVal = Math.round(ppRes.pp);
+                } catch (e) {}
+            }
+            const ppText = `${ppVal}pp`;
 
             const maxComboMapText = realMapMaxCombo ? `${realMapMaxCombo}x` : '?x';
             const comboText = `${userCombo}x/${maxComboMapText}`;
