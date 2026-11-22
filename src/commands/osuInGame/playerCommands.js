@@ -1,5 +1,10 @@
 import { getUserRecentPlay, calculateBeatmapPP } from '../../services/osu/osuService.js';
 import { getRoomLanguage, t } from '../../services/multi247/multilingualService.js';
+import { 
+    getPlayerStandingsSummary, 
+    formatPlayerStandingIRC, 
+    formatDailyLeaderboardIRC 
+} from '../../services/osu/dailyLeaderboardService.js';
 
 /**
  * Hàm đọc chuỗi Mods ngắn gọn
@@ -23,8 +28,27 @@ export async function handlePlayerCommands(channel, message, args, command) {
     const sender = message.user?.username || 'Player';
     const roomLang = await getRoomLanguage(channel);
 
-    // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r, .rc, !rc, .rm, !rm, .rt, !rt
     const lowerCmd = (command || '').toLowerCase();
+
+    // 📊 Lệnh xem Bảng Xếp Hạng Top Daily Multi hôm nay: .tm, !tm, .topmulti, !topmulti
+    if (['.tm', '!tm', '.topmulti', '!topmulti'].includes(lowerCmd)) {
+        const lbMsg = formatDailyLeaderboardIRC(5);
+        if (lbMsg) {
+            return await channel.sendMessage(lbMsg);
+        } else {
+            return await channel.sendMessage('YUE: Chưa có dữ liệu Bảng Xếp Hạng hôm nay tại phòng 24/7.');
+        }
+    }
+
+    // 👤 Lệnh xem Thành Tích & Thứ Hạng Cá Nhân: .me, !me, .mypp, !mypp
+    if (['.me', '!me', '.mypp', '!mypp'].includes(lowerCmd)) {
+        let targetUser = args.join(' ').trim() || sender;
+        const summary = getPlayerStandingsSummary(targetUser);
+        const replyMsg = formatPlayerStandingIRC(summary);
+        return await channel.sendMessage(replyMsg);
+    }
+
+    // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r, .rc, !rc, .rm, !rm, .rt, !rt
     if (['.rs', '!rs', '.r', '!r', '.rc', '!rc', '.rm', '!rm', '.rt', '!rt'].includes(lowerCmd)) {
         let targetUser = args.join(' ').trim() || sender;
 

@@ -230,10 +230,15 @@ export function registerMessageHandler(client) {
         }
 
         // --- 3. CÁC LỆNH OSU! STATS & BEATMAP ---
-        const isOsuStatsCmd = ['.profile', '.p', '.osu', '.user', '.stat', '.stats', '.st', '.r', '.recent', '.rs', '.rc', '.rm', '.rt', '.compare', '.c', '.map', '.m', '.lb', '.leaderboard', '.nc', '.nochoke', '.wi', '.whatif', '.pp', '.calc', '.pm', '.pickmap', '.rec'].includes(firstWord) || /^\.t\d+$/i.test(firstWord) || /^\.top\d+$/i.test(firstWord);
+        const isOsuStatsCmd = ['.profile', '.p', '.osu', '.user', '.stat', '.stats', '.st', '.r', '.recent', '.rs', '.rc', '.rm', '.rt', '.me', '!me', '.mypp', '!mypp', '.compare', '.c', '.map', '.m', '.lb', '.leaderboard', '.nc', '.nochoke', '.wi', '.whatif', '.pp', '.calc', '.pm', '.pickmap', '.rec'].includes(firstWord) || /^\.t\d+$/i.test(firstWord) || /^\.top\d+$/i.test(firstWord);
         
         if (isOsuStatsCmd && !isFeatureEnabled('osuCommandsDiscord')) {
-            return await message.reply("🔴 Tính năng **Lệnh Osu Discord** (.profile, .rs, .top, .stat...) tạm thời đang TẮT!");
+            return await message.reply("🔴 Tính năng **Lệnh Osu Discord** (.profile, .rs, .top, .stat, .me...) tạm thời đang TẮT!");
+        }
+
+        if (['.me', '!me', '.mypp', '!mypp'].includes(firstWord)) {
+            const { handleMeCommand } = await import('../../../commands/osu/meCommand.js');
+            return await handleMeCommand(message);
         }
 
         if (['.profile', '.p', '.osu', '.user'].includes(firstWord)) {

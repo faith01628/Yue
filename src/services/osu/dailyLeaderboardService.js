@@ -615,6 +615,270 @@ export function formatDailyLeaderboardIRC(limit = 5) {
     return `YUE: 🏆 Top ${topPlayers.length} Daily PP: ${rankEntries.join(' | ')}`;
 }
 
+/**
+ * 👤 6. Lấy Thống Kê Thứ Hạng & Phong Độ Cá Nhân của Người Chơi (Hôm nay, Tuần, Tháng, Lịch sử Top)
+ * @param {string|number} targetUserOrId Username hoặc UserID của người chơi
+ */
+export function getPlayerStandingsSummary(targetUserOrId) {
+    if (!targetUserOrId) return null;
+    const data = loadLeaderboardData();
+    const records = data.records || [];
+    if (records.length === 0) return null;
+
+    const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
+    const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
+
+    // Tìm tất cả record thuộc về player trong khoảng 30 ngày
+    const playerRecords = records.filter(r => {
+        if (!r) return false;
+        if (queryNum && r.userId === queryNum) return true;
+        const lower = (r.lowerName || r.username || '').toLowerCase().replace(/^\[|\]$/g, '');
+        return lower === queryStr;
+    });
+
+    if (playerRecords.length === 0) {
+        return {
+            found: false,
+            username: targetUserOrId,
+            cleanName: formatCleanUsername(targetUserOrId),
+            userId: queryNum || null
+        };
+    }
+
+    const latestRecord = [...playerRecords].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
+    const username = latestRecord.username || targetUserOrId;
+    const cleanName = formatCleanUsername(username);
+    const userId = latestRecord.userId || queryNum || null;
+    const playerLower = (latestRecord.lowerName || cleanName).toLowerCase().replace(/^\[|\]$/g, '');
+
+    const now = Date.now();
+    const todayStr = getTodayDateString();
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+    // 1. Hôm nay
+    const todayRecords = records.filter(r => r.date === todayStr).sort((a, b) => b.pp - a.pp);
+    const todayIdx = todayRecords.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const todayRank = todayIdx !== -1 ? todayIdx + 1 : null;
+    const todayRecord = todayIdx !== -1 ? todayRecords[todayIdx] : null;
+
+    // 2. Tuần (7 ngày gần nhất)
+    const weekCutoff = now - SEVEN_DAYS_MS;
+    const weekRecords = records.filter(r => (r.timestamp || 0) >= weekCutoff);
+    const weekMap = new Map();
+    for (const r of weekRecords) {
+        const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+        const ex = weekMap.get(key);
+        if (!ex || r.pp > ex.pp) weekMap.set(key, r);
+    }
+    const weeklySorted = Array.from(weekMap.values()).sort((a, b) => b.pp - a.pp);
+    const weekIdx = weeklySorted.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const weeklyRank = weekIdx !== -1 ? weekIdx + 1 : null;
+    const weeklyRecord = weekIdx !== -1 ? weeklySorted[weekIdx] : null;
+
+    // 3. Tháng (30 ngày gần nhất)
+    const monthMap = new Map();
+    for (const r of records) {
+        const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+        const ex = monthMap.get(key);
+        if (!ex || r.pp > ex.pp) monthMap.set(key, r);
+    }
+    const monthlySorted = Array.from(monthMap.values()).sort((a, b) => b.pp - a.pp);
+    const monthIdx = monthlySorted.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const monthlyRank = monthIdx !== -1 ? monthIdx + 1 : null;
+    const monthlyRecord = monthIdx !== -1 ? monthlySorted[monthIdx] : null;
+
+    // 4. Lịch sử từng ngày trong tháng (Day-by-Day Historical Standing)
+    const uniqueDates = Array.from(new Set(records.map(r => r.date).filter(Boolean))).sort().reverse();
+    const dailyHistory = [];
+
+    for (const d of uniqueDates) {
+        const dayRecs = records.filter(r => r.date === d).sort((a, b) => b.pp - a.pp);
+        const idx = dayRecs.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+        if (idx !== -1) {
+            dailyHistory.push({
+                date: d,
+                rank: idx + 1,
+                totalPlayers: dayRecs.length,
+                record: dayRecs[idx]
+            });
+        }
+    }
+
+    const totalDaysPlayed = dailyHistory.length;
+    const top1Days = dailyHistory.filter(h => h.rank === 1);
+    const top3Days = dailyHistory.filter(h => h.rank <= 3);
+    const top5Days = dailyHistory.filter(h => h.rank <= 5);
+    const top10Days = dailyHistory.filter(h => h.rank <= 10);
+
+    const bestRankEver = dailyHistory.length > 0 ? Math.min(...dailyHistory.map(h => h.rank)) : null;
+    const bestRecord = dailyHistory.length > 0 ? dailyHistory.reduce((prev, curr) => (curr.record.pp > prev.record.pp ? curr : prev)).record : null;
+
+    return {
+        found: true,
+        username,
+        cleanName,
+        userId,
+        todayRank,
+        todayTotal: todayRecords.length,
+        todayRecord,
+        weeklyRank,
+        weeklyTotal: weeklySorted.length,
+        weeklyRecord,
+        monthlyRank,
+        monthlyTotal: monthlySorted.length,
+        monthlyRecord,
+        dailyHistory,
+        totalDaysPlayed,
+        top1Count: top1Days.length,
+        top3Count: top3Days.length,
+        top5Count: top5Days.length,
+        top10Count: top10Days.length,
+        bestRankEver,
+        bestRecord
+    };
+}
+
+/**
+ * 🎙️ 7. Tạo chuỗi thông báo Thành Tích Cá Nhân (.me) chuẩn Bancho IRC (Gọn gàng trên 1 dòng)
+ * Tự động tối ưu độ dài chat:
+ * - Người ít chơi (<= 2 ngày): Hiển thị cụ thể từng ngày đã lọt top (ví dụ: Từng đạt #2 ngày 18/11: 260pp).
+ * - Người đứng top nhiều ngày (3+ ngày): Tự động gom nhóm huân chương (3x Top 1, 5x Top 3) tránh tràn chat IRC.
+ */
+export function formatPlayerStandingIRC(summary) {
+    if (!summary || !summary.found) {
+        const name = summary?.cleanName || 'Player';
+        return `YUE: ${name} | Chưa có dữ liệu thi đấu trong 30 ngày qua tại phòng 24/7. Hãy cùng chơi để ghi danh lên Bảng Xếp Hạng nhé!`;
+    }
+
+    const { cleanName, userId, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord } = summary;
+
+    const userProfileLink = userId 
+        ? `[https://osu.ppy.sh/u/${userId} ${cleanName}]`
+        : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]`;
+
+    let todayPart = 'Hôm nay: Chưa chơi';
+    if (todayRank && todayRecord) {
+        const mods = Array.isArray(todayRecord.mods) && todayRecord.mods.length > 0 ? ` +${todayRecord.mods.join('')}` : (todayRecord.mod && todayRecord.mod !== 'NM' ? ` +${todayRecord.mod}` : '');
+        const mapShort = todayRecord.mapTitle ? (todayRecord.mapTitle.length > 18 ? todayRecord.mapTitle.substring(0, 16) + '..' : todayRecord.mapTitle) : '';
+        const mapInfo = mapShort ? ` - ${mapShort}${mods}` : '';
+        todayPart = `Hôm nay: #${todayRank} (${todayRecord.pp}pp${mapInfo})`;
+    }
+
+    const weekPart = weeklyRank ? `Tuần: #${weeklyRank} (${weeklyRecord?.pp || 0}pp)` : 'Tuần: --';
+    const monthPart = monthlyRank ? `Tháng: #${monthlyRank} (${monthlyRecord?.pp || 0}pp)` : 'Tháng: --';
+
+    let historyPart = '';
+    const todayStr = getTodayDateString();
+
+    if (totalDaysPlayed <= 2) {
+        const pastDays = dailyHistory.filter(h => h.date !== todayStr);
+        if (pastDays.length === 0) {
+            historyPart = `Mới tham gia hôm nay!`;
+        } else if (pastDays.length === 1) {
+            const [y, m, d] = pastDays[0].date.split('-');
+            historyPart = `Từng đạt #${pastDays[0].rank} ngày ${d}/${m} (${pastDays[0].record.pp}pp)`;
+        } else {
+            const list = pastDays.map(h => {
+                const [y, m, d] = h.date.split('-');
+                return `#${h.rank} (${d}/${m})`;
+            }).join(', ');
+            historyPart = `Từng đạt ${list}`;
+        }
+    } else {
+        const parts = [];
+        if (top1Count > 0) parts.push(`${top1Count}x Top 1 🥇`);
+        const otherTop3 = top3Count - top1Count;
+        if (otherTop3 > 0) parts.push(`${otherTop3}x Top 3 🥉`);
+        else if (top3Count > 0 && top1Count === 0) parts.push(`${top3Count}x Top 3 🥉`);
+        
+        const otherTop5 = top5Count - top3Count;
+        if (otherTop5 > 0 && parts.length < 2) parts.push(`${otherTop5}x Top 5`);
+        if (parts.length === 0 && top10Count > 0) parts.push(`${top10Count}x Top 10`);
+
+        if (parts.length > 0) {
+            historyPart = `🏆 ${parts.join(', ')} trong ${totalDaysPlayed} ngày`;
+        } else {
+            historyPart = `Đã chơi ${totalDaysPlayed} ngày (Best: #${bestRankEver} ${bestRecord?.pp || 0}pp)`;
+        }
+    }
+
+    return `YUE: ${userProfileLink} | ${todayPart} | ${weekPart} | ${monthPart} | ${historyPart}`;
+}
+
+/**
+ * 🎨 8. Tạo Discord Embed Thống Kê Thành Tích Cá Nhân (.me)
+ */
+export function buildPlayerStandingEmbed(summary) {
+    if (!summary || !summary.found) {
+        const name = summary?.cleanName || 'Player';
+        return {
+            color: 0xE74C3C,
+            title: `👤 THÀNH TÍCH MULTI 24/7 — ${name}`,
+            description: `Chưa tìm thấy dữ liệu thi đấu của **${name}** trong 30 ngày qua tại các phòng 24/7 của Yue AI.\nHãy tham gia chơi phòng 24/7 để bắt đầu ghi danh nhé!`,
+            footer: { text: 'Yue AI Multi 24/7 • Dùng .me [tên] để tra cứu' },
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    const { cleanName, userId, todayRank, todayTotal, todayRecord, weeklyRank, weeklyTotal, weeklyRecord, monthlyRank, monthlyTotal, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord } = summary;
+
+    const profileUrl = userId ? `https://osu.ppy.sh/users/${userId}` : null;
+    const avatarUrl = userId ? `https://a.ppy.sh/${userId}` : 'https://a.ppy.sh/0';
+
+    // Format hôm nay
+    let todayValue = '*Chưa tham gia thi đấu hôm nay.*';
+    if (todayRank && todayRecord) {
+        const ruleset = toOsuApiRuleset(todayRecord.mode || 'osu');
+        let playUrl = todayRecord.scoreId
+            ? `https://osu.ppy.sh/scores/${ruleset}/${todayRecord.scoreId}`
+            : (todayRecord.beatmapId ? `https://osu.ppy.sh/b/${todayRecord.beatmapId}` : null);
+        const mapTitleLink = playUrl ? `[**${todayRecord.mapTitle}**](<${playUrl}>)` : `**${todayRecord.mapTitle}**`;
+        const modsTag = todayRecord.mods && todayRecord.mods.length > 0 ? ` +${todayRecord.mods.join('')}` : (todayRecord.mod && todayRecord.mod !== 'NM' ? ` +${todayRecord.mod}` : '');
+        const starTag = todayRecord.starRating ? ` \`(${Number(todayRecord.starRating).toFixed(2)}★${modsTag})\`` : '';
+        todayValue = `🥇 Hạng **#${todayRank}** / ${todayTotal} người chơi — **${todayRecord.pp} PP** \`[${todayRecord.mode || 'std'}]\`\n┗ 🎵 ${mapTitleLink}${starTag}`;
+    }
+
+    // Format tuần
+    let weekValue = '*Chưa có dữ liệu trong 7 ngày gần nhất.*';
+    if (weeklyRank && weeklyRecord) {
+        weekValue = `📊 Hạng **#${weeklyRank}** / ${weeklyTotal} người chơi — Peak **${weeklyRecord.pp} PP**`;
+    }
+
+    // Format tháng
+    let monthValue = '*Chưa có dữ liệu trong 30 ngày gần nhất.*';
+    if (monthlyRank && monthlyRecord) {
+        monthValue = `📊 Hạng **#${monthlyRank}** / ${monthlyTotal} người chơi — Peak **${monthlyRecord.pp} PP**`;
+    }
+
+    // Format phong độ / lịch sử
+    const historyLines = [];
+    historyLines.push(`• Tổng số ngày thi đấu: **${totalDaysPlayed}** ngày`);
+    if (top1Count > 0) historyLines.push(`• 🥇 Top 1 Ngày: **${top1Count}** lần`);
+    if (top3Count > 0) historyLines.push(`• 🥉 Top 3 Ngày: **${top3Count}** lần`);
+    if (top10Count > 0 && top3Count < totalDaysPlayed) historyLines.push(`• ⭐ Top 10 Ngày: **${top10Count}** lần`);
+    if (bestRecord) {
+        historyLines.push(`• 🏆 Peak PP cao nhất tháng: **${bestRecord.pp} PP** (Đạt #${bestRankEver} ngày ${bestRecord.date})`);
+    }
+
+    return {
+        color: 0x3498DB,
+        author: {
+            name: `Thành Tích Multi 24/7 — ${cleanName}`,
+            icon_url: avatarUrl,
+            url: profileUrl || undefined
+        },
+        description: profileUrl ? `[Xem trang cá nhân osu! của **${cleanName}**](<${profileUrl}>)` : `Người chơi **${cleanName}**`,
+        fields: [
+            { name: '🌅 Hôm nay', value: todayValue, inline: false },
+            { name: '📅 7 Ngày gần nhất (Tuần)', value: weekValue, inline: true },
+            { name: '🗓️ 30 Ngày gần nhất (Tháng)', value: monthValue, inline: true },
+            { name: '🏆 Phong độ & Thống kê Top', value: historyLines.join('\n'), inline: false }
+        ],
+        footer: { text: 'Yue AI Multi 24/7 • Gõ .me trong game hoặc Discord' },
+        timestamp: new Date().toISOString()
+    };
+}
+
 // ==========================================================
 // 🛡️ BẢNG XẾP HẠNG DISCORD LIVE & LƯU TRỮ LỊCH SỬ THÁNG (JSON)
 // ==========================================================

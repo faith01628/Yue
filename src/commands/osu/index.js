@@ -20,3 +20,4 @@ export { buildDetailedScoreEmbed } from './embedBuilder.js';
 export { findBeatmapIdFromChannel } from './helper.js';
 export { handleNaturalLanguageMapRequest, handlePickMapCommand } from './recommendMapCommand.js';
 export { handleTopMultiCommand } from './topMultiCommand.js';
+export { handleMeCommand } from './meCommand.js';
