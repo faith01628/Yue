@@ -437,7 +437,7 @@ export async function executeRoutedCommand(channel, messageObj, commandString, s
         if (['.map', '!map', '.m', '.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random', '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link', '.a', '!a', '.accept', '!accept'].includes(command)) {
             return await handleMapCommands(channel, messageObj, commandArgs, command);
         }
-        if (['.rs', '!rs', '.r', '!r'].includes(command)) {
+        if (['.rs', '!rs', '.r', '!r', '.rc', '!rc', '.rm', '!rm', '.rt', '!rt'].includes(command)) {
             return await handlePlayerCommands(channel, messageObj, commandArgs, command);
         }
         if ([
@@ -640,7 +640,7 @@ async function handleInGameChat(message) {
             '.addref', '!addref', '.rmref', '!rmref', '.refs', '!refs',
             '.abort', '!abort', '.time', '!time', '.timer', '.rnd', '!rnd', '.random', '!random',
             '.map', '!map', '.m', '.dl', '!dl', '.dlmap', '!dlmap', '.link', '!link', '.a', '!a', '.accept', '!accept',
-            '.rs', '!rs', '.r', '!r',
+            '.rs', '!rs', '.r', '!r', '.rc', '!rc', '.rm', '!rm', '.rt', '!rt',
             '.ah', '!ah', '.autohost', '!autohost', '.ahoff', '!ahoff', '.unah', '!unah',
             '.next', '!next', '.skip', '!skip', '.q', '!q', '.queue', '!queue'
         ];

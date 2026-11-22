@@ -6,6 +6,7 @@ import {
     syncTodayOfficialPP
 } from '../../services/osu/dailyLeaderboardService.js';
 import { normalizeGameMode } from '../../services/osu/matchEvaluatorService.js';
+import { toOsuApiRuleset } from '../../services/osu/osuService.js';
 
 const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
@@ -52,10 +53,20 @@ function formatLeaderboardSection(players, isCompact = false) {
         const starStr = starNum ? `  \`⭐ ${starNum}★\`` : '';
 
         // 🔗 Ưu tiên Link Play của người chơi (scoreUrl từ .rs), nếu không kiểm tra được (unranked/fallback) thì dùng link Beatmap
-        const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
-        const playUrl = isPlayScore
-            ? p.scoreUrl
-            : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+        const ruleset = toOsuApiRuleset(p.mode || 'osu');
+        let playUrl = null;
+        if (p.scoreId) {
+            playUrl = `https://osu.ppy.sh/scores/${ruleset}/${p.scoreId}`;
+        } else if (p.scoreUrl && p.scoreUrl.includes('/scores/')) {
+            const m = p.scoreUrl.match(/\/scores\/(?:osu|taiko|fruits|mania\/)?(\d+)/);
+            if (m) {
+                playUrl = `https://osu.ppy.sh/scores/${ruleset}/${m[1]}`;
+            } else {
+                playUrl = p.scoreUrl;
+            }
+        } else if (p.beatmapId) {
+            playUrl = `https://osu.ppy.sh/b/${p.beatmapId}`;
+        }
 
         const mapTitleFormatted = playUrl
             ? `[**${mapTitleStr}**](<${playUrl}>)`

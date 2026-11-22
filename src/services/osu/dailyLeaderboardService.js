@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { calculateBeatmapPP, getUserBeatmapPlays, getRecentScoresOnBeatmap } from './osuService.js';
+import { calculateBeatmapPP, getUserBeatmapPlays, getRecentScoresOnBeatmap, toOsuApiRuleset } from './osuService.js';
 import { normalizeGameMode } from './matchEvaluatorService.js';
 import { botConfig } from '../../config/botConfig.js';
 import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
@@ -240,8 +240,9 @@ async function verifyPlayPP(beatmapId, scoreObj, mode, playerName = '') {
                     : null;
                 const chosen = sameScore || fresh[0];
                 const recalcMods = normalizeMods(chosen.mods ?? scoreObj.mods);
+                const scoreRuleset = toOsuApiRuleset(chosen.mode || mode || 'osu');
                 const scoreId = chosen.id || null;
-                const scoreUrl = scoreId ? `https://osu.ppy.sh/scores/${scoreId}` : null;
+                const scoreUrl = scoreId ? `https://osu.ppy.sh/scores/${scoreRuleset}/${scoreId}` : null;
 
                 if (typeof chosen.pp === 'number' && chosen.pp > 0) {
                     return {
@@ -480,7 +481,8 @@ export async function recordMatchDailyPeakPP(matchSummary) {
             const modsTag = modsArray.length > 0 ? ` +${modStr}` : '';
             console.log(`[Leaderboard] ⚡ New Peak PP for ${cleanName}: ${realPp}pp [${scoreMode}] (Old: ${existingRecord?.pp || 0}pp) on ${beatmapTitle} (${starFloat.toFixed(2)}★${modsTag})`);
 
-            const playScoreUrl = verified?.scoreUrl || (verified?.scoreId ? `https://osu.ppy.sh/scores/${verified.scoreId}` : null);
+            const scoreRuleset = toOsuApiRuleset(scoreMode || matchMode || 'osu');
+            const playScoreUrl = verified?.scoreUrl || (verified?.scoreId ? `https://osu.ppy.sh/scores/${scoreRuleset}/${verified.scoreId}` : null);
 
             const newRecord = {
                 username: cleanName,
@@ -726,12 +728,22 @@ function formatPlayerListForDiscord(players) {
         const mapTitleShort = p.mapTitle ? (p.mapTitle.length > 40 ? p.mapTitle.substring(0, 37) + '...' : p.mapTitle) : 'Unknown Map';
 
         const modeShort = p.mode ? normalizeGameMode(p.mode) : 'std';
+        const ruleset = toOsuApiRuleset(p.mode || 'osu');
 
         // 🔗 Ưu tiên Link Play của người chơi (scoreUrl từ .rs), nếu không kiểm tra được (unranked/fallback) thì dùng link Beatmap
-        const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
-        const playUrl = isPlayScore
-            ? p.scoreUrl
-            : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+        let playUrl = null;
+        if (p.scoreId) {
+            playUrl = `https://osu.ppy.sh/scores/${ruleset}/${p.scoreId}`;
+        } else if (p.scoreUrl && p.scoreUrl.includes('/scores/')) {
+            const m = p.scoreUrl.match(/\/scores\/(?:osu|taiko|fruits|mania\/)?(\d+)/);
+            if (m) {
+                playUrl = `https://osu.ppy.sh/scores/${ruleset}/${m[1]}`;
+            } else {
+                playUrl = p.scoreUrl;
+            }
+        } else if (p.beatmapId) {
+            playUrl = `https://osu.ppy.sh/b/${p.beatmapId}`;
+        }
 
         const mapTitleFormatted = playUrl
             ? `[**${mapTitleShort}**](<${playUrl}>)`
@@ -761,7 +773,8 @@ export async function syncTodayOfficialPP() {
                 const sortedPlays = todayPlays.sort((a, b) => (b.pp || 0) - (a.pp || 0));
                 const bestPlay = sortedPlays[0];
                 const officialPeak = Math.round(bestPlay.pp);
-                const newScoreUrl = bestPlay.id ? `https://osu.ppy.sh/scores/${bestPlay.id}` : null;
+                const ruleset = toOsuApiRuleset(r.mode || 'osu');
+                const newScoreUrl = bestPlay.id ? `https://osu.ppy.sh/scores/${ruleset}/${bestPlay.id}` : null;
                 if (officialPeak !== r.pp || (newScoreUrl && r.scoreUrl !== newScoreUrl)) {
                     console.log(`[Leaderboard Sync] 🎯 Cập nhật PP chuẩn từ osu! API cho ${r.username}: ${r.pp}pp ➔ ${officialPeak}pp`);
                     r.pp = officialPeak;

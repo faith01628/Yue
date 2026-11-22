@@ -23,12 +23,19 @@ export async function handlePlayerCommands(channel, message, args, command) {
     const sender = message.user?.username || 'Player';
     const roomLang = await getRoomLanguage(channel);
 
-    // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r
-    if (['.rs', '!rs', '.r', '!r'].includes(command)) {
+    // 🎯 Hỗ trợ các bí danh: .rs, !rs, .r, !r, .rc, !rc, .rm, !rm, .rt, !rt
+    const lowerCmd = (command || '').toLowerCase();
+    if (['.rs', '!rs', '.r', '!r', '.rc', '!rc', '.rm', '!rm', '.rt', '!rt'].includes(lowerCmd)) {
         let targetUser = args.join(' ').trim() || sender;
 
+        // 🎯 Tự động phát hiện Mode từ lệnh
+        let mode = 'osu';
+        if (lowerCmd.endsWith('c')) mode = 'fruits';
+        else if (lowerCmd.endsWith('m')) mode = 'mania';
+        else if (lowerCmd.endsWith('t')) mode = 'taiko';
+
         try {
-            const data = await getUserRecentPlay(targetUser);
+            const data = await getUserRecentPlay(targetUser, mode);
 
             if (!data || !data.score) {
                 return await channel.sendMessage(t('rsNoScore', roomLang, targetUser));

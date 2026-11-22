@@ -10,6 +10,7 @@ import {
     removeLeaderboardChannel,
     getVNTimeInfo
 } from '../../services/osu/dailyLeaderboardService.js';
+import { toOsuApiRuleset } from '../../services/osu/osuService.js';
 
 const HISTORY_DIR = path.resolve('data/history');
 
@@ -135,10 +136,20 @@ export async function handleHistoryLeaderboardCommand(message, args = []) {
             const profileUrl = p.userId ? `https://osu.ppy.sh/u/${p.userId}` : `https://osu.ppy.sh/u/${encodeURIComponent(p.username)}`;
             const modsArr = Array.isArray(p.mods) && p.mods.length > 0 ? p.mods : [];
             const modsTag = modsArr.length > 0 ? ` +${modsArr.join('')}` : '';
-            const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
-            const playUrl = isPlayScore
-                ? p.scoreUrl
-                : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+            const ruleset = toOsuApiRuleset(p.mode || 'osu');
+            let playUrl = null;
+            if (p.scoreId) {
+                playUrl = `https://osu.ppy.sh/scores/${ruleset}/${p.scoreId}`;
+            } else if (p.scoreUrl && p.scoreUrl.includes('/scores/')) {
+                const m = p.scoreUrl.match(/\/scores\/(?:osu|taiko|fruits|mania\/)?(\d+)/);
+                if (m) {
+                    playUrl = `https://osu.ppy.sh/scores/${ruleset}/${m[1]}`;
+                } else {
+                    playUrl = p.scoreUrl;
+                }
+            } else if (p.beatmapId) {
+                playUrl = `https://osu.ppy.sh/b/${p.beatmapId}`;
+            }
             const mapTitleFormatted = playUrl
                 ? `[**${p.mapTitle || 'Unknown Map'}**](<${playUrl}>)`
                 : `*${p.mapTitle || 'Unknown Map'}*`;
