@@ -135,7 +135,14 @@ export async function handleHistoryLeaderboardCommand(message, args = []) {
             const profileUrl = p.userId ? `https://osu.ppy.sh/u/${p.userId}` : `https://osu.ppy.sh/u/${encodeURIComponent(p.username)}`;
             const modsArr = Array.isArray(p.mods) && p.mods.length > 0 ? p.mods : [];
             const modsTag = modsArr.length > 0 ? ` +${modsArr.join('')}` : '';
-            return `${medal} [**${p.username}**](<${profileUrl}>) — **${p.pp}pp**\n┗ *${p.mapTitle || 'Unknown Map'}* \`(${(p.starRating || 0).toFixed(2)}★${modsTag})\``;
+            const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
+            const playUrl = isPlayScore
+                ? p.scoreUrl
+                : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+            const mapTitleFormatted = playUrl
+                ? `[**${p.mapTitle || 'Unknown Map'}**](<${playUrl}>)`
+                : `*${p.mapTitle || 'Unknown Map'}*`;
+            return `${medal} [**${p.username}**](<${profileUrl}>) — **${p.pp}pp**\n┗ ${mapTitleFormatted} \`(${(p.starRating || 0).toFixed(2)}★${modsTag})\``;
         }).join('\n') : '*Không có dữ liệu.*';
 
         const embed = {

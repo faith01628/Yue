@@ -51,10 +51,14 @@ function formatLeaderboardSection(players, isCompact = false) {
         const modsStr = modsArr.length > 0 ? ` **+${modsArr.join('')}**` : '';
         const starStr = starNum ? `  \`⭐ ${starNum}★\`` : '';
 
-        // 🔗 Link Beatmap trực tiếp trên osu! web
-        const mapUrl = p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null;
-        const mapTitleFormatted = mapUrl
-            ? `[**${mapTitleStr}**](<${mapUrl}>)`
+        // 🔗 Ưu tiên Link Play của người chơi (scoreUrl từ .rs), nếu không kiểm tra được (unranked/fallback) thì dùng link Beatmap
+        const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
+        const playUrl = isPlayScore
+            ? p.scoreUrl
+            : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+
+        const mapTitleFormatted = playUrl
+            ? `[**${mapTitleStr}**](<${playUrl}>)`
             : `*${mapTitleStr}*`;
 
         const mapInfo = `\n┗ 🎵 ${mapTitleFormatted}${modsStr}${starStr}`;

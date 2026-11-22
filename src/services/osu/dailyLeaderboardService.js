@@ -240,9 +240,17 @@ async function verifyPlayPP(beatmapId, scoreObj, mode, playerName = '') {
                     : null;
                 const chosen = sameScore || fresh[0];
                 const recalcMods = normalizeMods(chosen.mods ?? scoreObj.mods);
+                const scoreId = chosen.id || null;
+                const scoreUrl = scoreId ? `https://osu.ppy.sh/scores/${scoreId}` : null;
 
                 if (typeof chosen.pp === 'number' && chosen.pp > 0) {
-                    return { pp: Math.round(chosen.pp), source: 'official (.rs)', mods: recalcMods };
+                    return {
+                        pp: Math.round(chosen.pp),
+                        source: 'official (.rs)',
+                        mods: recalcMods,
+                        scoreId,
+                        scoreUrl
+                    };
                 }
 
                 const st = chosen.statistics || {};
@@ -268,7 +276,9 @@ async function verifyPlayPP(beatmapId, scoreObj, mode, playerName = '') {
                         pp: Math.round(ppRes.pp),
                         source: 'recalc (.rs stats)',
                         mods: recalcMods,
-                        stars: (typeof starsVal === 'number' && !isNaN(starsVal) && starsVal > 0) ? starsVal : null
+                        stars: (typeof starsVal === 'number' && !isNaN(starsVal) && starsVal > 0) ? starsVal : null,
+                        scoreId,
+                        scoreUrl
                     };
                 }
             }
@@ -470,6 +480,8 @@ export async function recordMatchDailyPeakPP(matchSummary) {
             const modsTag = modsArray.length > 0 ? ` +${modStr}` : '';
             console.log(`[Leaderboard] ⚡ New Peak PP for ${cleanName}: ${realPp}pp [${scoreMode}] (Old: ${existingRecord?.pp || 0}pp) on ${beatmapTitle} (${starFloat.toFixed(2)}★${modsTag})`);
 
+            const playScoreUrl = verified?.scoreUrl || (verified?.scoreId ? `https://osu.ppy.sh/scores/${verified.scoreId}` : null);
+
             const newRecord = {
                 username: cleanName,
                 lowerName: lowerName,
@@ -478,8 +490,9 @@ export async function recordMatchDailyPeakPP(matchSummary) {
                 mapTitle: beatmapTitle,
                 beatmapId: beatmapId || existingRecord?.beatmapId || null,
                 matchId: matchSummary.matchId || null,
-                scoreId: scoreObj.scoreId || null,
-                scoreUrl: matchSummary.matchId ? `https://osu.ppy.sh/community/matches/${matchSummary.matchId}` : null,
+                scoreId: verified?.scoreId || (isSameMapAsStored ? existingRecord?.scoreId : null) || null,
+                scoreUrl: playScoreUrl || (isSameMapAsStored ? existingRecord?.scoreUrl : null) || null,
+                matchUrl: matchSummary.matchId ? `https://osu.ppy.sh/community/matches/${matchSummary.matchId}` : null,
                 starRating: starFloat,
                 star: starFloat,
                 mods: modsArray,
@@ -714,10 +727,14 @@ function formatPlayerListForDiscord(players) {
 
         const modeShort = p.mode ? normalizeGameMode(p.mode) : 'std';
 
-        // 🔗 Link Beatmap trực tiếp trên osu! web
-        const mapUrl = p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null;
-        const mapTitleFormatted = mapUrl
-            ? `[**${mapTitleShort}**](<${mapUrl}>)`
+        // 🔗 Ưu tiên Link Play của người chơi (scoreUrl từ .rs), nếu không kiểm tra được (unranked/fallback) thì dùng link Beatmap
+        const isPlayScore = !!(p.scoreUrl && p.scoreUrl.includes('/scores/'));
+        const playUrl = isPlayScore
+            ? p.scoreUrl
+            : (p.scoreId ? `https://osu.ppy.sh/scores/${p.scoreId}` : (p.beatmapId ? `https://osu.ppy.sh/b/${p.beatmapId}` : null));
+
+        const mapTitleFormatted = playUrl
+            ? `[**${mapTitleShort}**](<${playUrl}>)`
             : `*${mapTitleShort}*`;
 
         return `${medal} [**${cleanName}**](<${profileUrl}>) — **${p.pp}pp** \`[${modeShort}]\`\n┗ ${mapTitleFormatted} \`(${starFloat.toFixed(2)}★${modsTag})\``;
@@ -741,10 +758,18 @@ export async function syncTodayOfficialPP() {
                 // Chỉ xét các lượt chơi trong NGÀY HÔM NAY có PP chính thức; lấy mức CAO NHẤT (đúng ý nghĩa Peak PP)
                 const todayPlays = plays.filter(p => p.pp !== null && getVNTimeInfo(new Date(p.time)).dateStr === today);
                 if (todayPlays.length === 0) return;
-                const officialPeak = Math.round(Math.max(...todayPlays.map(p => p.pp)));
-                if (officialPeak !== r.pp) {
+                const sortedPlays = todayPlays.sort((a, b) => (b.pp || 0) - (a.pp || 0));
+                const bestPlay = sortedPlays[0];
+                const officialPeak = Math.round(bestPlay.pp);
+                const newScoreUrl = bestPlay.id ? `https://osu.ppy.sh/scores/${bestPlay.id}` : null;
+                if (officialPeak !== r.pp || (newScoreUrl && r.scoreUrl !== newScoreUrl)) {
                     console.log(`[Leaderboard Sync] 🎯 Cập nhật PP chuẩn từ osu! API cho ${r.username}: ${r.pp}pp ➔ ${officialPeak}pp`);
                     r.pp = officialPeak;
+                    if (bestPlay.id) {
+                        r.scoreId = bestPlay.id;
+                        r.scoreUrl = newScoreUrl;
+                    }
+                    r.verified = true;
                     hasChanges = true;
                 }
             } catch (err) {}
@@ -1027,6 +1052,9 @@ export function checkAndArchiveMonthlyLeaderboard() {
                             userId: p.userId,
                             pp: p.pp,
                             mapTitle: p.mapTitle,
+                            beatmapId: p.beatmapId || null,
+                            scoreId: p.scoreId || null,
+                            scoreUrl: p.scoreUrl || null,
                             starRating: p.starRating,
                             mods: p.mods,
                             date: p.date
