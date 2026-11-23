@@ -1,11 +1,12 @@
 import { getUserRecentPlay } from '../../services/osu/osuService.js';
-import { getLinkedOsuUsername } from '../../services/osu/userService.js';
+import { getLinkedOsuUsername, resolveOsuTargetUser } from '../../services/osu/userService.js';
 import { buildDetailedScoreEmbed } from './embedBuilder.js';
 
 export async function handleOsuRecentCommand(message) {
     const rawArgs = message.content.trim().split(/ +/).slice(1).join(' ').trim();
     const linkedUsername = getLinkedOsuUsername(message.author.id);
-    const username = rawArgs || linkedUsername || message.member?.displayName || message.author.username;
+    const rawTarget = rawArgs || linkedUsername || message.member?.displayName || message.author.username;
+    const username = resolveOsuTargetUser(rawTarget) || rawTarget;
 
     // 🎯 Tự động phát hiện Mode từ tiền tố lệnh: .rc -> catch/fruits, .rm -> mania, .rt -> taiko, .rs/.r -> osu
     const firstWord = message.content.trim().split(/ +/)[0].toLowerCase();

@@ -9,7 +9,7 @@ import {
     TextInputStyle
 } from 'discord.js';
 import { getUserTopPlays, calculateBeatmapPP, getBeatmapDetail, timeAgo } from '../../services/osu/osuService.js';
-import { getLinkedOsuUsername } from '../../services/osu/userService.js';
+import { getLinkedOsuUsername, resolveOsuTargetUser } from '../../services/osu/userService.js';
 import { buildDetailedScoreEmbed } from './embedBuilder.js';
 import { getRankEmoji, EMOJIS } from '../../config/emojis.js';
 
@@ -34,7 +34,8 @@ export async function handleOsuTopCommand(message) {
     // Tên người chơi hỗ trợ có khoảng trắng (ví dụ: Moki Moki)
     const rawUsername = remainingArgs.join(' ').trim();
     const linkedUsername = getLinkedOsuUsername(message.author.id);
-    const username = rawUsername || linkedUsername || message.member?.displayName || message.author.username;
+    const rawTarget = rawUsername || linkedUsername || message.member?.displayName || message.author.username;
+    const username = resolveOsuTargetUser(rawTarget) || rawTarget;
 
     await message.channel.sendTyping();
     const data = await getUserTopPlays(username, 100);

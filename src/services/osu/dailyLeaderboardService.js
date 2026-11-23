@@ -5,6 +5,7 @@ import { normalizeGameMode } from './matchEvaluatorService.js';
 import { botConfig } from '../../config/botConfig.js';
 import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
+import { findUserByAnyNameOrId } from './userService.js';
 
 const LEADERBOARD_FILE = path.resolve('data/multi247DailyLeaderboard.json');
 const HISTORY_DIR = path.resolve('data/history');
@@ -395,7 +396,11 @@ export async function recordMatchDailyPeakPP(matchSummary) {
             localPp = Math.min(localPp, maxStarCap);
         }
 
-        const existingRecordIndex = data.records.findIndex(r => r.lowerName === lowerName && r.date === today);
+        const existingRecordIndex = data.records.findIndex(r => {
+            if (r.date !== today) return false;
+            if (scoreObj.userId && r.userId === scoreObj.userId) return true;
+            return r.lowerName === lowerName;
+        });
         const existingRecord = existingRecordIndex !== -1 ? data.records[existingRecordIndex] : null;
 
         evaluatedPlayers.push({
@@ -551,12 +556,13 @@ export function getTopPlayersForPeriod(days = 1, limit = 5) {
         return r.timestamp >= cutoff;
     });
 
-    // Gom nhóm theo người chơi (giữ lại bản ghi PP cao nhất trong khoảng thời gian đó)
+    // Gom nhóm theo người chơi (Ưu tiên gom theo UID vĩnh viễn để bảo toàn kỷ lục kể cả khi đổi tên)
     const playerBestMap = new Map();
     for (const r of filteredRecords) {
-        const existing = playerBestMap.get(r.lowerName);
+        const key = r.userId ? `uid_${r.userId}` : r.lowerName;
+        const existing = playerBestMap.get(key);
         if (!existing || r.pp > existing.pp) {
-            playerBestMap.set(r.lowerName, r);
+            playerBestMap.set(key, r);
         }
     }
 
@@ -634,8 +640,11 @@ export function formatDailyLeaderboardIRC(limit = 5) {
  */
 export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
     const prevMonth = getPreviousMonthString();
+    const linkedUser = findUserByAnyNameOrId(targetUserOrId);
     const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
-    const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
+    const queryNum = linkedUser?.userId || (/^\d+$/.test(queryStr) ? Number(queryStr) : null);
+    const currentStr = linkedUser?.currentUsername ? linkedUser.currentUsername.toLowerCase().replace(/^\[|\]$/g, '') : null;
+    const oldNames = (linkedUser?.previousUsernames || []).map(n => n.toLowerCase().replace(/^\[|\]$/g, ''));
 
     // 1. Quét trong thư mục data/history (các file monthlyLeaderboard_YYYY-MM.json)
     if (fs.existsSync(HISTORY_DIR)) {
@@ -658,7 +667,9 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
                     let match = archiveData.top10.find((p, idx) => {
                         if (queryNum && p.userId === queryNum) return true;
                         const pLower = (p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
-                        return pLower === queryStr;
+                        if (pLower === queryStr || (currentStr && pLower === currentStr)) return true;
+                        if (oldNames.includes(pLower)) return true;
+                        return false;
                     });
                     if (!match && !queryNum && queryStr.length >= 3) {
                         match = archiveData.top10.find(p => {
@@ -674,8 +685,8 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
                             mapTitle: match.mapTitle,
                             mods: match.mods,
                             date: match.date,
-                            username: match.username,
-                            userId: match.userId
+                            username: linkedUser?.currentUsername || match.username,
+                            userId: match.userId || queryNum
                         };
                     }
                 }
@@ -691,7 +702,7 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
         if (prevRecords.length > 0) {
             const playerBestMap = new Map();
             for (const r of prevRecords) {
-                const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+                const key = r.userId ? `uid_${r.userId}` : (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
                 const ex = playerBestMap.get(key);
                 if (!ex || r.pp > ex.pp) playerBestMap.set(key, r);
             }
@@ -699,7 +710,9 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
             const idx = sortedList.findIndex(p => {
                 if (queryNum && p.userId === queryNum) return true;
                 const pLower = (p.lowerName || p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
-                return pLower === queryStr;
+                if (pLower === queryStr || (currentStr && pLower === currentStr)) return true;
+                if (oldNames.includes(pLower)) return true;
+                return false;
             });
             if (idx !== -1) {
                 const p = sortedList[idx];
@@ -710,8 +723,8 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
                     mapTitle: p.mapTitle,
                     mods: p.mods,
                     date: p.date,
-                    username: p.username,
-                    userId: p.userId
+                    username: linkedUser?.currentUsername || p.username,
+                    userId: p.userId || queryNum
                 };
             }
         }
@@ -722,26 +735,41 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
 
 /**
  * 👤 6. Lấy Thống Kê Thứ Hạng & Phong Độ Cá Nhân của Người Chơi (Hôm nay, Tuần, Tháng, Tháng trước, Lịch sử Top)
+ * Hỗ trợ nhận diện 2 lớp: UID vĩnh viễn, Tên hiện tại, và Lịch sử tên cũ khi đổi tên
  * @param {string|number} targetUserOrId Username hoặc UserID của người chơi
  */
 export function getPlayerStandingsSummary(targetUserOrId) {
     if (!targetUserOrId) return null;
     const data = loadLeaderboardData();
     const records = data.records || [];
-    const prevMonthStanding = getPreviousMonthTopStanding(targetUserOrId, records);
 
+    // 1. Phân giải danh tính người chơi (Hỗ trợ 2 lớp: UID, Tên mới, Tên cũ)
+    const linkedUser = findUserByAnyNameOrId(targetUserOrId);
     const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
-    const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
+    const queryNum = linkedUser?.userId || (/^\d+$/.test(queryStr) ? Number(queryStr) : null);
+    const currentUsername = linkedUser?.currentUsername || null;
+    const currentStr = currentUsername ? currentUsername.toLowerCase().replace(/^\[|\]$/g, '') : null;
+    const isRenamed = !!linkedUser?.isRenamed;
+    const matchedOldName = linkedUser?.matchedName || null;
+    const oldNames = (linkedUser?.previousUsernames || []).map(n => n.toLowerCase().replace(/^\[|\]$/g, ''));
 
-    // 1. Tìm tất cả record thuộc về player trong khoảng 30 ngày (Exact match trước)
-    let playerRecords = records.filter(r => {
+    const prevMonthStanding = getPreviousMonthTopStanding(queryNum || targetUserOrId, records);
+
+    // Helper kiểm tra xem 1 record có thuộc về người chơi này không
+    const isPlayerRecord = (r) => {
         if (!r) return false;
-        if (queryNum && r.userId === queryNum) return true;
+        if (queryNum && r.userId && r.userId === queryNum) return true;
         const lower = (r.lowerName || r.username || '').toLowerCase().replace(/^\[|\]$/g, '');
-        return lower === queryStr;
-    });
+        if (lower === queryStr) return true;
+        if (currentStr && lower === currentStr) return true;
+        if (oldNames.includes(lower)) return true;
+        return false;
+    };
 
-    // 2. Nếu không tìm thấy và queryStr >= 3 ký tự: thử tìm tương đối (startsWith / includes)
+    // 2. Tìm tất cả record thuộc về player trong khoảng 30 ngày (Exact / UID match trước)
+    let playerRecords = records.filter(isPlayerRecord);
+
+    // 3. Nếu không tìm thấy và queryStr >= 3 ký tự: thử tìm tương đối (startsWith / includes)
     if (playerRecords.length === 0 && !queryNum && queryStr.length >= 3) {
         playerRecords = records.filter(r => {
             if (!r) return false;
@@ -752,13 +780,15 @@ export function getPlayerStandingsSummary(targetUserOrId) {
 
     if (playerRecords.length === 0) {
         if (prevMonthStanding) {
-            const username = prevMonthStanding.username || targetUserOrId;
+            const username = currentUsername || prevMonthStanding.username || targetUserOrId;
             const cleanName = formatCleanUsername(username);
             return {
                 found: true,
                 username,
                 cleanName,
                 userId: prevMonthStanding.userId || queryNum || null,
+                isRenamed,
+                matchedOldName,
                 todayRank: null,
                 todayTotal: records.filter(r => r.date === getTodayDateString()).length,
                 todayRecord: null,
@@ -784,14 +814,16 @@ export function getPlayerStandingsSummary(targetUserOrId) {
             found: false,
             username: targetUserOrId,
             cleanName: formatCleanUsername(targetUserOrId),
-            userId: queryNum || null
+            userId: queryNum || null,
+            isRenamed: false,
+            matchedOldName: null
         };
     }
 
     const latestRecord = [...playerRecords].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
-    const username = latestRecord.username || targetUserOrId;
+    const username = currentUsername || latestRecord.username || targetUserOrId;
     const cleanName = formatCleanUsername(username);
-    const userId = latestRecord.userId || queryNum || null;
+    const userId = queryNum || latestRecord.userId || null;
     const playerLower = (latestRecord.lowerName || cleanName).toLowerCase().replace(/^\[|\]$/g, '');
 
     const now = Date.now();
@@ -800,33 +832,33 @@ export function getPlayerStandingsSummary(targetUserOrId) {
 
     // 1. Hôm nay
     const todayRecords = records.filter(r => r.date === todayStr).sort((a, b) => b.pp - a.pp);
-    const todayIdx = todayRecords.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const todayIdx = todayRecords.findIndex(isPlayerRecord);
     const todayRank = todayIdx !== -1 ? todayIdx + 1 : null;
     const todayRecord = todayIdx !== -1 ? todayRecords[todayIdx] : null;
 
-    // 2. Tuần (7 ngày gần nhất)
+    // 2. Tuần (7 ngày gần nhất) - Gom nhóm theo UID (hoặc lowerName nếu không có UID)
     const weekCutoff = now - SEVEN_DAYS_MS;
     const weekRecords = records.filter(r => (r.timestamp || 0) >= weekCutoff);
     const weekMap = new Map();
     for (const r of weekRecords) {
-        const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+        const key = r.userId ? `uid_${r.userId}` : (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
         const ex = weekMap.get(key);
         if (!ex || r.pp > ex.pp) weekMap.set(key, r);
     }
     const weeklySorted = Array.from(weekMap.values()).sort((a, b) => b.pp - a.pp);
-    const weekIdx = weeklySorted.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const weekIdx = weeklySorted.findIndex(isPlayerRecord);
     const weeklyRank = weekIdx !== -1 ? weekIdx + 1 : null;
     const weeklyRecord = weekIdx !== -1 ? weeklySorted[weekIdx] : null;
 
-    // 3. Tháng (30 ngày gần nhất)
+    // 3. Tháng (30 ngày gần nhất) - Gom nhóm theo UID (hoặc lowerName nếu không có UID)
     const monthMap = new Map();
     for (const r of records) {
-        const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+        const key = r.userId ? `uid_${r.userId}` : (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
         const ex = monthMap.get(key);
         if (!ex || r.pp > ex.pp) monthMap.set(key, r);
     }
     const monthlySorted = Array.from(monthMap.values()).sort((a, b) => b.pp - a.pp);
-    const monthIdx = monthlySorted.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+    const monthIdx = monthlySorted.findIndex(isPlayerRecord);
     const monthlyRank = monthIdx !== -1 ? monthIdx + 1 : null;
     const monthlyRecord = monthIdx !== -1 ? monthlySorted[monthIdx] : null;
 
@@ -836,7 +868,7 @@ export function getPlayerStandingsSummary(targetUserOrId) {
 
     for (const d of uniqueDates) {
         const dayRecs = records.filter(r => r.date === d).sort((a, b) => b.pp - a.pp);
-        const idx = dayRecs.findIndex(r => (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '') === playerLower || (userId && r.userId === userId));
+        const idx = dayRecs.findIndex(isPlayerRecord);
         if (idx !== -1) {
             dailyHistory.push({
                 date: d,
@@ -861,6 +893,8 @@ export function getPlayerStandingsSummary(targetUserOrId) {
         username,
         cleanName,
         userId,
+        isRenamed,
+        matchedOldName,
         todayRank,
         todayTotal: todayRecords.length,
         todayRecord,
@@ -888,6 +922,7 @@ export function getPlayerStandingsSummary(targetUserOrId) {
  * - Người ít chơi (<= 2 ngày): Hiển thị cụ thể từng ngày đã lọt top (ví dụ: Từng đạt #2 ngày 18/11: 260pp).
  * - Người đứng top nhiều ngày (3+ ngày): Tự động gom nhóm huân chương (3x Top 1, 5x Top 3) tránh tràn chat IRC.
  * - Người lọt Top tháng trước: Tự động hiển thị huy chương và thứ hạng tháng trước (ví dụ: Tháng trước: #1 🥇 691pp).
+ * - Người đổi tên: Tự động ghi chú tên cũ kèm theo (ví dụ: [link WhiteCat] (Tên cũ: oldName)).
  */
 export function formatPlayerStandingIRC(summary) {
     if (!summary || !summary.found) {
@@ -895,11 +930,13 @@ export function formatPlayerStandingIRC(summary) {
         return `YUE: ${name} | Chưa có dữ liệu thi đấu trong 30 ngày qua tại phòng 24/7. Hãy cùng chơi để ghi danh lên Bảng Xếp Hạng nhé!`;
     }
 
-    const { cleanName, userId, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
+    const { cleanName, userId, isRenamed, matchedOldName, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
+
+    const renameTag = (isRenamed && matchedOldName) ? ` (Tên cũ: ${matchedOldName})` : '';
 
     const userProfileLink = userId 
-        ? `[https://osu.ppy.sh/u/${userId} ${cleanName}]`
-        : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]`;
+        ? `[https://osu.ppy.sh/u/${userId} ${cleanName}]${renameTag}`
+        : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]${renameTag}`;
 
     // 🎖️ Phần hiển thị Top Tháng Trước (nếu có)
     let prevMonthPart = '';
@@ -988,10 +1025,11 @@ export function buildPlayerStandingEmbed(summary) {
         };
     }
 
-    const { cleanName, userId, todayRank, todayTotal, todayRecord, weeklyRank, weeklyTotal, weeklyRecord, monthlyRank, monthlyTotal, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
+    const { cleanName, userId, isRenamed, matchedOldName, todayRank, todayTotal, todayRecord, weeklyRank, weeklyTotal, weeklyRecord, monthlyRank, monthlyTotal, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
 
     const profileUrl = userId ? `https://osu.ppy.sh/users/${userId}` : null;
     const avatarUrl = userId ? `https://a.ppy.sh/${userId}` : 'https://a.ppy.sh/0';
+    const renameText = (isRenamed && matchedOldName) ? ` *(Trước đây: ${matchedOldName})*` : '';
 
     // Format hôm nay
     let todayValue = '*Chưa tham gia thi đấu hôm nay.*';
@@ -1053,11 +1091,11 @@ export function buildPlayerStandingEmbed(summary) {
     return {
         color: 0x3498DB,
         author: {
-            name: `Thành Tích Multi 24/7 — ${cleanName}`,
+            name: `Thành Tích Multi 24/7 — ${cleanName}${isRenamed && matchedOldName ? ` (Cũ: ${matchedOldName})` : ''}`,
             icon_url: avatarUrl,
             url: profileUrl || undefined
         },
-        description: profileUrl ? `[Xem trang cá nhân osu! của **${cleanName}**](<${profileUrl}>)` : `Người chơi **${cleanName}**`,
+        description: profileUrl ? `[Xem trang cá nhân osu! của **${cleanName}**](<${profileUrl}>)${renameText}` : `Người chơi **${cleanName}**${renameText}`,
         fields,
         footer: { text: 'Yue AI Multi 24/7 • Gõ .me trong game hoặc Discord' },
         timestamp: new Date().toISOString()
@@ -1108,9 +1146,10 @@ export function lockYesterdayLeaderboardSnapshot(yesterdayDateStr) {
 
         const playerBestMap = new Map();
         for (const r of records) {
-            const existingBest = playerBestMap.get(r.lowerName);
+            const key = r.userId ? `uid_${r.userId}` : r.lowerName;
+            const existingBest = playerBestMap.get(key);
             if (!existingBest || r.pp > existingBest.pp) {
-                playerBestMap.set(r.lowerName, r);
+                playerBestMap.set(key, r);
             }
         }
 
@@ -1148,9 +1187,10 @@ export function getYesterdayLockedTopPlayers(dateStr) {
     const records = (data.records || []).filter(r => r && r.date === dateStr);
     const playerBestMap = new Map();
     for (const r of records) {
-        const existing = playerBestMap.get(r.lowerName);
+        const key = r.userId ? `uid_${r.userId}` : r.lowerName;
+        const existing = playerBestMap.get(key);
         if (!existing || r.pp > existing.pp) {
-            playerBestMap.set(r.lowerName, r);
+            playerBestMap.set(key, r);
         }
     }
     return Array.from(playerBestMap.values()).sort((a, b) => b.pp - a.pp).slice(0, 10);
@@ -1165,7 +1205,9 @@ function formatPlayerListForDiscord(players) {
 
     return players.map((p, idx) => {
         const medal = MEDAL_ICONS[idx] || `${idx + 1}.`;
-        const cleanName = formatCleanUsername(p.username);
+        const linked = findUserByAnyNameOrId(p.userId || p.username);
+        const currentName = linked?.currentUsername || p.username;
+        const cleanName = formatCleanUsername(currentName);
         const profileUrl = p.userId
             ? `https://osu.ppy.sh/u/${p.userId}`
             : `https://osu.ppy.sh/u/${encodeURIComponent(cleanName)}`;
@@ -1486,9 +1528,10 @@ export function checkAndArchiveMonthlyLeaderboard() {
                 
                 const playerBestMap = new Map();
                 for (const r of filtered) {
-                    const existing = playerBestMap.get(r.lowerName);
+                    const key = r.userId ? `uid_${r.userId}` : r.lowerName;
+                    const existing = playerBestMap.get(key);
                     if (!existing || r.pp > existing.pp) {
-                        playerBestMap.set(r.lowerName, r);
+                        playerBestMap.set(key, r);
                     }
                 }
 

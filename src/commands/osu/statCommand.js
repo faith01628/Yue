@@ -1,6 +1,6 @@
 import { EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { getUserProfile, getUserTopPlays } from '../../services/osu/osuService.js';
-import { getLinkedOsuUsername } from '../../services/osu/userService.js';
+import { getLinkedOsuUsername, resolveOsuTargetUser } from '../../services/osu/userService.js';
 import { analyzeUserSkillProfile } from '../../utils/userSkillAnalyzer.js';
 import { saveUserSkillProfile } from '../../services/storage/userProfileStore.js';
 import { isHeavyLibraryOn, isFeatureOn } from '../../config/botConfig.js';
@@ -8,7 +8,8 @@ import { isHeavyLibraryOn, isFeatureOn } from '../../config/botConfig.js';
 export async function handleOsuStatCommand(message) {
     const rawArgs = message.content.trim().split(/ +/).slice(1).join(' ').trim();
     const linkedUsername = getLinkedOsuUsername(message.author.id);
-    const username = rawArgs || linkedUsername || message.member?.displayName || message.author.username;
+    const rawTarget = rawArgs || linkedUsername || message.member?.displayName || message.author.username;
+    const username = resolveOsuTargetUser(rawTarget) || rawTarget;
 
     await message.channel.sendTyping();
 

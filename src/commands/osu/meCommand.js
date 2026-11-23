@@ -3,7 +3,7 @@ import {
     buildPlayerStandingEmbed, 
     syncTodayOfficialPP 
 } from '../../services/osu/dailyLeaderboardService.js';
-import { getLinkedOsuUsername } from '../../services/osu/userService.js';
+import { getLinkedOsuAccount, getLinkedOsuUsername } from '../../services/osu/userService.js';
 
 export async function handleMeCommand(message) {
     try {
@@ -17,12 +17,14 @@ export async function handleMeCommand(message) {
         // 1. Kiểm tra nếu có tag/mention Discord
         const mentionedUser = message.mentions?.users?.first();
         if (mentionedUser) {
-            targetUser = getLinkedOsuUsername(mentionedUser.id) || mentionedUser.username;
+            const acc = getLinkedOsuAccount(mentionedUser.id);
+            targetUser = acc?.userId || acc?.username || mentionedUser.username;
         } else if (args.length > 0) {
             targetUser = args.join(' ').trim();
         } else {
             // 2. Không nhập tên: lấy từ tài khoản đã link .link hoặc tên hiển thị
-            targetUser = getLinkedOsuUsername(message.author.id) || message.member?.displayName || message.author.username;
+            const acc = getLinkedOsuAccount(message.author.id);
+            targetUser = acc?.userId || acc?.username || message.member?.displayName || message.author.username;
         }
 
         const summary = getPlayerStandingsSummary(targetUser);

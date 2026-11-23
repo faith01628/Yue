@@ -105,7 +105,14 @@ async function fetchOsuAPI(endpoint, params = {}) {
  */
 export async function getUserProfile(username, mode = 'osu') {
     try {
-        return await fetchOsuAPI(`/users/${encodeURIComponent(username)}/${mode}`);
+        const data = await fetchOsuAPI(`/users/${encodeURIComponent(username)}/${mode}`);
+        if (data && data.id) {
+            try {
+                const { updateUserFromProfile } = await import('./userService.js');
+                updateUserFromProfile(data);
+            } catch {}
+        }
+        return data;
     } catch (error) {
         console.error(`❌ Lỗi lấy profile osu! của ${username}:`, error.response?.data || error.message);
         return null;
