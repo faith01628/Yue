@@ -655,11 +655,17 @@ export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
             for (const file of filesToScan) {
                 const archiveData = safeReadJSON(file, null);
                 if (archiveData && Array.isArray(archiveData.top10)) {
-                    const match = archiveData.top10.find((p, idx) => {
+                    let match = archiveData.top10.find((p, idx) => {
                         if (queryNum && p.userId === queryNum) return true;
                         const pLower = (p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
                         return pLower === queryStr;
                     });
+                    if (!match && !queryNum && queryStr.length >= 3) {
+                        match = archiveData.top10.find(p => {
+                            const pLower = (p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
+                            return pLower.startsWith(queryStr) || pLower.includes(queryStr);
+                        });
+                    }
                     if (match) {
                         return {
                             month: archiveData.month,
@@ -727,13 +733,22 @@ export function getPlayerStandingsSummary(targetUserOrId) {
     const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
     const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
 
-    // Tìm tất cả record thuộc về player trong khoảng 30 ngày
-    const playerRecords = records.filter(r => {
+    // 1. Tìm tất cả record thuộc về player trong khoảng 30 ngày (Exact match trước)
+    let playerRecords = records.filter(r => {
         if (!r) return false;
         if (queryNum && r.userId === queryNum) return true;
         const lower = (r.lowerName || r.username || '').toLowerCase().replace(/^\[|\]$/g, '');
         return lower === queryStr;
     });
+
+    // 2. Nếu không tìm thấy và queryStr >= 3 ký tự: thử tìm tương đối (startsWith / includes)
+    if (playerRecords.length === 0 && !queryNum && queryStr.length >= 3) {
+        playerRecords = records.filter(r => {
+            if (!r) return false;
+            const lower = (r.lowerName || r.username || '').toLowerCase().replace(/^\[|\]$/g, '');
+            return lower.startsWith(queryStr) || lower.includes(queryStr);
+        });
+    }
 
     if (playerRecords.length === 0) {
         if (prevMonthStanding) {

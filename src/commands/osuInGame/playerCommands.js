@@ -43,6 +43,21 @@ export async function handlePlayerCommands(channel, message, args, command) {
     // 👤 Lệnh xem Thành Tích & Thứ Hạng Cá Nhân: .me, !me, .mypp, !mypp
     if (['.me', '!me', '.mypp', '!mypp'].includes(lowerCmd)) {
         let targetUser = args.join(' ').trim() || sender;
+
+        // Nếu người chơi gõ tên người khác trong phòng multi, tự động khớp với danh sách người đang có mặt trong phòng
+        if (args.length > 0 && channel.lobby?.slots) {
+            const slots = channel.lobby.slots || [];
+            const activePlayers = slots.filter(s => s && s.user).map(s => s.user.username);
+            const matched = activePlayers.find(p => {
+                const pLow = p.toLowerCase();
+                const tLow = targetUser.toLowerCase();
+                return pLow === tLow || pLow.replace(/\[|\]/g, '') === tLow.replace(/\[|\]/g, '') || pLow.startsWith(tLow);
+            });
+            if (matched) {
+                targetUser = matched;
+            }
+        }
+
         const summary = getPlayerStandingsSummary(targetUser);
         const replyMsg = formatPlayerStandingIRC(summary);
         return await channel.sendMessage(replyMsg);
