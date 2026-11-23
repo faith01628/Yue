@@ -7,6 +7,7 @@ import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 
 const LEADERBOARD_FILE = path.resolve('data/multi247DailyLeaderboard.json');
+const HISTORY_DIR = path.resolve('data/history');
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
@@ -52,6 +53,19 @@ export function getYesterdayDateString(refDate = new Date()) {
     const prevM = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
     const prevD = String(dateObj.getUTCDate()).padStart(2, '0');
     return `${prevY}-${prevM}-${prevD}`;
+}
+
+/**
+ * 🕒 Helper: Lấy chuỗi tháng trước (YYYY-MM) theo đúng Múi giờ Việt Nam
+ */
+export function getPreviousMonthString(refDate = new Date()) {
+    const vn = getVNTimeInfo(refDate);
+    const [y, m] = vn.dateStr.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    d.setUTCMonth(d.getUTCMonth() - 1);
+    const prevY = d.getUTCFullYear();
+    const prevM = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${prevY}-${prevM}`;
 }
 
 function ensureStorageFile() {
@@ -616,14 +630,99 @@ export function formatDailyLeaderboardIRC(limit = 5) {
 }
 
 /**
- * 👤 6. Lấy Thống Kê Thứ Hạng & Phong Độ Cá Nhân của Người Chơi (Hôm nay, Tuần, Tháng, Lịch sử Top)
+ * 🗓️ Helper: Lấy thông tin xếp hạng Top 10 của người chơi trong tháng trước (từ tệp lưu trữ history)
+ */
+export function getPreviousMonthTopStanding(targetUserOrId, records = []) {
+    const prevMonth = getPreviousMonthString();
+    const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
+    const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
+
+    // 1. Quét trong thư mục data/history (các file monthlyLeaderboard_YYYY-MM.json)
+    if (fs.existsSync(HISTORY_DIR)) {
+        try {
+            const targetFile = path.join(HISTORY_DIR, `monthlyLeaderboard_${prevMonth}.json`);
+            let filesToScan = [];
+            if (fs.existsSync(targetFile)) {
+                filesToScan.push(targetFile);
+            } else {
+                const allFiles = fs.readdirSync(HISTORY_DIR)
+                    .filter(f => f.startsWith('monthlyLeaderboard_') && f.endsWith('.json'))
+                    .sort()
+                    .reverse();
+                filesToScan = allFiles.map(f => path.join(HISTORY_DIR, f));
+            }
+
+            for (const file of filesToScan) {
+                const archiveData = safeReadJSON(file, null);
+                if (archiveData && Array.isArray(archiveData.top10)) {
+                    const match = archiveData.top10.find((p, idx) => {
+                        if (queryNum && p.userId === queryNum) return true;
+                        const pLower = (p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
+                        return pLower === queryStr;
+                    });
+                    if (match) {
+                        return {
+                            month: archiveData.month,
+                            rank: match.rank || (archiveData.top10.indexOf(match) + 1),
+                            pp: match.pp,
+                            mapTitle: match.mapTitle,
+                            mods: match.mods,
+                            date: match.date,
+                            username: match.username,
+                            userId: match.userId
+                        };
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[Previous Month Standing Error]:', err.message);
+        }
+    }
+
+    // 2. Fallback: Nếu chưa archive sang file, kiểm tra trong data.records (nếu có bản ghi của tháng trước)
+    if (Array.isArray(records) && records.length > 0) {
+        const prevRecords = records.filter(r => r && r.date && r.date.startsWith(prevMonth));
+        if (prevRecords.length > 0) {
+            const playerBestMap = new Map();
+            for (const r of prevRecords) {
+                const key = (r.lowerName || '').toLowerCase().replace(/^\[|\]$/g, '');
+                const ex = playerBestMap.get(key);
+                if (!ex || r.pp > ex.pp) playerBestMap.set(key, r);
+            }
+            const sortedList = Array.from(playerBestMap.values()).sort((a, b) => b.pp - a.pp).slice(0, 10);
+            const idx = sortedList.findIndex(p => {
+                if (queryNum && p.userId === queryNum) return true;
+                const pLower = (p.lowerName || p.username || '').toLowerCase().replace(/^\[|\]$/g, '');
+                return pLower === queryStr;
+            });
+            if (idx !== -1) {
+                const p = sortedList[idx];
+                return {
+                    month: prevMonth,
+                    rank: idx + 1,
+                    pp: p.pp,
+                    mapTitle: p.mapTitle,
+                    mods: p.mods,
+                    date: p.date,
+                    username: p.username,
+                    userId: p.userId
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 👤 6. Lấy Thống Kê Thứ Hạng & Phong Độ Cá Nhân của Người Chơi (Hôm nay, Tuần, Tháng, Tháng trước, Lịch sử Top)
  * @param {string|number} targetUserOrId Username hoặc UserID của người chơi
  */
 export function getPlayerStandingsSummary(targetUserOrId) {
     if (!targetUserOrId) return null;
     const data = loadLeaderboardData();
     const records = data.records || [];
-    if (records.length === 0) return null;
+    const prevMonthStanding = getPreviousMonthTopStanding(targetUserOrId, records);
 
     const queryStr = String(targetUserOrId).trim().replace(/^\[|\]$/g, '').toLowerCase();
     const queryNum = /^\d+$/.test(queryStr) ? Number(queryStr) : null;
@@ -637,6 +736,35 @@ export function getPlayerStandingsSummary(targetUserOrId) {
     });
 
     if (playerRecords.length === 0) {
+        if (prevMonthStanding) {
+            const username = prevMonthStanding.username || targetUserOrId;
+            const cleanName = formatCleanUsername(username);
+            return {
+                found: true,
+                username,
+                cleanName,
+                userId: prevMonthStanding.userId || queryNum || null,
+                todayRank: null,
+                todayTotal: records.filter(r => r.date === getTodayDateString()).length,
+                todayRecord: null,
+                weeklyRank: null,
+                weeklyTotal: 0,
+                weeklyRecord: null,
+                monthlyRank: null,
+                monthlyTotal: 0,
+                monthlyRecord: null,
+                dailyHistory: [],
+                totalDaysPlayed: 0,
+                top1Count: 0,
+                top3Count: 0,
+                top5Count: 0,
+                top10Count: 0,
+                bestRankEver: null,
+                bestRecord: null,
+                prevMonthStanding
+            };
+        }
+
         return {
             found: false,
             username: targetUserOrId,
@@ -734,7 +862,8 @@ export function getPlayerStandingsSummary(targetUserOrId) {
         top5Count: top5Days.length,
         top10Count: top10Days.length,
         bestRankEver,
-        bestRecord
+        bestRecord,
+        prevMonthStanding
     };
 }
 
@@ -743,6 +872,7 @@ export function getPlayerStandingsSummary(targetUserOrId) {
  * Tự động tối ưu độ dài chat:
  * - Người ít chơi (<= 2 ngày): Hiển thị cụ thể từng ngày đã lọt top (ví dụ: Từng đạt #2 ngày 18/11: 260pp).
  * - Người đứng top nhiều ngày (3+ ngày): Tự động gom nhóm huân chương (3x Top 1, 5x Top 3) tránh tràn chat IRC.
+ * - Người lọt Top tháng trước: Tự động hiển thị huy chương và thứ hạng tháng trước (ví dụ: Tháng trước: #1 🥇 691pp).
  */
 export function formatPlayerStandingIRC(summary) {
     if (!summary || !summary.found) {
@@ -750,11 +880,23 @@ export function formatPlayerStandingIRC(summary) {
         return `YUE: ${name} | Chưa có dữ liệu thi đấu trong 30 ngày qua tại phòng 24/7. Hãy cùng chơi để ghi danh lên Bảng Xếp Hạng nhé!`;
     }
 
-    const { cleanName, userId, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord } = summary;
+    const { cleanName, userId, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
 
     const userProfileLink = userId 
         ? `[https://osu.ppy.sh/u/${userId} ${cleanName}]`
         : `[https://osu.ppy.sh/u/${encodeURIComponent(cleanName)} ${cleanName}]`;
+
+    // 🎖️ Phần hiển thị Top Tháng Trước (nếu có)
+    let prevMonthPart = '';
+    if (prevMonthStanding) {
+        const medal = prevMonthStanding.rank === 1 ? '🥇 ' : (prevMonthStanding.rank === 2 ? '🥈 ' : (prevMonthStanding.rank === 3 ? '🥉 ' : ''));
+        prevMonthPart = `Tháng trước: #${prevMonthStanding.rank} ${medal}(${prevMonthStanding.pp}pp)`;
+    }
+
+    // Nếu người chơi chưa có lượt chơi nào trong tháng này nhưng có thành tích tháng trước:
+    if (totalDaysPlayed === 0 && prevMonthStanding) {
+        return `YUE: ${userProfileLink} | Hôm nay: Chưa chơi | Tuần: -- | Tháng: -- | 🎖️ ${prevMonthPart} | Từng lọt Top tháng ${prevMonthStanding.month}!`;
+    }
 
     let todayPart = 'Hôm nay: Chưa chơi';
     if (todayRank && todayRecord) {
@@ -802,7 +944,18 @@ export function formatPlayerStandingIRC(summary) {
         }
     }
 
-    return `YUE: ${userProfileLink} | ${todayPart} | ${weekPart} | ${monthPart} | ${historyPart}`;
+    const segments = [
+        `YUE: ${userProfileLink}`,
+        todayPart,
+        weekPart,
+        monthPart
+    ];
+    if (prevMonthPart) {
+        segments.push(`🎖️ ${prevMonthPart}`);
+    }
+    segments.push(historyPart);
+
+    return segments.join(' | ');
 }
 
 /**
@@ -820,7 +973,7 @@ export function buildPlayerStandingEmbed(summary) {
         };
     }
 
-    const { cleanName, userId, todayRank, todayTotal, todayRecord, weeklyRank, weeklyTotal, weeklyRecord, monthlyRank, monthlyTotal, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord } = summary;
+    const { cleanName, userId, todayRank, todayTotal, todayRecord, weeklyRank, weeklyTotal, weeklyRecord, monthlyRank, monthlyTotal, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
 
     const profileUrl = userId ? `https://osu.ppy.sh/users/${userId}` : null;
     const avatarUrl = userId ? `https://a.ppy.sh/${userId}` : 'https://a.ppy.sh/0';
@@ -852,13 +1005,35 @@ export function buildPlayerStandingEmbed(summary) {
 
     // Format phong độ / lịch sử
     const historyLines = [];
+    if (prevMonthStanding) {
+        const medal = prevMonthStanding.rank === 1 ? '🥇' : (prevMonthStanding.rank === 2 ? '🥈' : (prevMonthStanding.rank === 3 ? '🥉' : '🎖️'));
+        historyLines.push(`• ${medal} Thành tích Tháng trước (${prevMonthStanding.month}): **#${prevMonthStanding.rank}** (${prevMonthStanding.pp} PP)`);
+    }
     historyLines.push(`• Tổng số ngày thi đấu: **${totalDaysPlayed}** ngày`);
     if (top1Count > 0) historyLines.push(`• 🥇 Top 1 Ngày: **${top1Count}** lần`);
     if (top3Count > 0) historyLines.push(`• 🥉 Top 3 Ngày: **${top3Count}** lần`);
     if (top10Count > 0 && top3Count < totalDaysPlayed) historyLines.push(`• ⭐ Top 10 Ngày: **${top10Count}** lần`);
     if (bestRecord) {
-        historyLines.push(`• 🏆 Peak PP cao nhất tháng: **${bestRecord.pp} PP** (Đạt #${bestRankEver} ngày ${bestRecord.date})`);
+        historyLines.push(`• 🏆 Peak PP cao nhất tháng này: **${bestRecord.pp} PP** (Đạt #${bestRankEver} ngày ${bestRecord.date})`);
     }
+
+    const fields = [
+        { name: '🌅 Hôm nay', value: todayValue, inline: false },
+        { name: '📅 7 Ngày gần nhất (Tuần)', value: weekValue, inline: true },
+        { name: '🗓️ 30 Ngày gần nhất (Tháng)', value: monthValue, inline: true }
+    ];
+
+    if (prevMonthStanding) {
+        const medal = prevMonthStanding.rank === 1 ? '🥇' : (prevMonthStanding.rank === 2 ? '🥈' : (prevMonthStanding.rank === 3 ? '🥉' : '🎖️'));
+        const mapStr = prevMonthStanding.mapTitle ? `\n┗ *${prevMonthStanding.mapTitle}*` : '';
+        fields.push({
+            name: `${medal} Tháng trước (${prevMonthStanding.month})`,
+            value: `Top **#${prevMonthStanding.rank}** — Peak **${prevMonthStanding.pp} PP**${mapStr}`,
+            inline: true
+        });
+    }
+
+    fields.push({ name: '🏆 Phong độ & Thống kê Top', value: historyLines.join('\n'), inline: false });
 
     return {
         color: 0x3498DB,
@@ -868,12 +1043,7 @@ export function buildPlayerStandingEmbed(summary) {
             url: profileUrl || undefined
         },
         description: profileUrl ? `[Xem trang cá nhân osu! của **${cleanName}**](<${profileUrl}>)` : `Người chơi **${cleanName}**`,
-        fields: [
-            { name: '🌅 Hôm nay', value: todayValue, inline: false },
-            { name: '📅 7 Ngày gần nhất (Tuần)', value: weekValue, inline: true },
-            { name: '🗓️ 30 Ngày gần nhất (Tháng)', value: monthValue, inline: true },
-            { name: '🏆 Phong độ & Thống kê Top', value: historyLines.join('\n'), inline: false }
-        ],
+        fields,
         footer: { text: 'Yue AI Multi 24/7 • Gõ .me trong game hoặc Discord' },
         timestamp: new Date().toISOString()
     };
@@ -885,7 +1055,6 @@ export function buildPlayerStandingEmbed(summary) {
 
 const BOARD_CONFIG_FILE = path.resolve('data/multi247BoardConfig.json');
 const SNAPSHOT_FILE = path.resolve('data/multi247YesterdaySnapshot.json');
-const HISTORY_DIR = path.resolve('data/history');
 let leaderboardDiscordClient = null;
 
 export function setDiscordClientForLeaderboard(client) {
@@ -1269,14 +1438,6 @@ export function startDailyLeaderboardResetLoop(client) {
             sendAdminDebugLog('ERROR', 'Lỗi vòng lặp reset ngày Leaderboard', e.message, { stack: e.stack });
         }
     }, 60 * 1000);
-}
-
-function getPreviousMonthString() {
-    const now = new Date();
-    now.setMonth(now.getMonth() - 1);
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}`;
 }
 
 function getCurrentMonthString() {
