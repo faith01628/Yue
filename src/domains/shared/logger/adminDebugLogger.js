@@ -1,4 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
+import { recordSignal } from '../../../selfEvolution/evolutionStore.js';
 import 'dotenv/config';
 
 let discordClient = null;
@@ -12,6 +13,18 @@ export function setDiscordClientForLogger(client) {
 export async function sendAdminDebugLog(level = 'ERROR', title = '', message = '', details = {}) {
     const adminChannelId = process.env.ADMIN_DEBUG_CHANNEL_ID;
     const officialGuildId = process.env.OFFICIAL_GUILD_ID;
+
+    if (level === 'ERROR') {
+        try {
+            recordSignal({
+                type: 'error',
+                key: title || message,
+                summary: `${title ? `[${title}] ` : ''}${message || ''}`,
+                source: 'adminDebugLogger',
+                sample: details?.stack ? String(details.stack).split('\n')[0] : message
+            });
+        } catch {}
+    }
 
     if (!adminChannelId || !discordClient) {
         return;

@@ -8,6 +8,7 @@ import { handleDiscordToBanchoSync } from '../../../services/multiChatSyncServic
 import { handleAiChatMessage } from './aiChatHandler.js';
 import { handleOwnerAssistantCommand } from '../../../commands/ownerAssistantCommand.js';
 import { isOwnerUser } from '../../../services/ownerAssistantService.js';
+import { handleEvolutionMessage } from '../../../selfEvolution/index.js';
 
 import {
     handleOsuProfileCommand,
@@ -32,6 +33,14 @@ export function registerMessageHandler(client) {
         if (process.env.MULTI_CHAT_SYNC_CHANNEL_ID && message.channel.id === process.env.MULTI_CHAT_SYNC_CHANNEL_ID) {
             const isHandledBySync = await handleDiscordToBanchoSync(message);
             if (isHandledBySync) return;
+        }
+
+        // 🧠 XỬ LÝ LỆNH & THREAD TỰ PHÁT TRIỂN CỦA BOSS (.teach, .propose, .spec, .done, .reject)
+        try {
+            const isHandledByEvolution = await handleEvolutionMessage(message, client);
+            if (isHandledByEvolution) return;
+        } catch (evoErr) {
+            console.error('[SelfEvolution Message Error]:', evoErr.message);
         }
 
         const content = message.content.trim();

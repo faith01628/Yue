@@ -23,6 +23,7 @@ import { get247RoomConfig, loadMulti247Rooms, is247CommunityRoom, unregister247R
 import { recordRoomMatch, handleMatchEvaluationCommand, generateMatchSummaryCommentary } from './matchEvaluatorService.js';
 import { recordMatchDailyPeakPP, formatDailyLeaderboardIRC } from './dailyLeaderboardService.js';
 import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
+import { handleBanchoPM } from '../osuPmAssistant/index.js';
 
 const { BanchoClient } = banchojs;
 
@@ -287,9 +288,10 @@ export async function initBancho() {
     const isMultiEnabled = botConfig.osuMultiplayer?.enabled;
     const isNormalEnabled = botConfig.osuMultiplayer?.normalRooms;
     const is247Enabled = botConfig.osuMultiplayer?.community247Rooms;
+    const isPmAssistantEnabled = Boolean(botConfig.osuPmAssistant?.enabled);
 
-    if (!isMultiEnabled || (!isNormalEnabled && !is247Enabled)) {
-        console.log('⚡ [Master Control Panel] Tính năng Osu Multiplayer & Bancho IRC đang TẮT (Hoặc cả Normal & 247 đều tắt)!');
+    if (!isPmAssistantEnabled && (!isMultiEnabled || (!isNormalEnabled && !is247Enabled))) {
+        console.log('⚡ [Master Control Panel] Tính năng Osu Multiplayer & PM Assistant đang TẮT!');
         return null;
     }
     if (isConnected && bancho && typeof bancho.isConnected === 'function' && bancho.isConnected()) {
@@ -313,7 +315,7 @@ export async function initBancho() {
                 bancho.removeAllListeners('CM');
                 bancho.removeAllListeners('disconnected');
 
-                bancho.on('PM', handleInGameChat);
+                bancho.on('PM', handleBanchoPM);
                 bancho.on('CM', handleInGameChat);
                 bancho.on('disconnected', (err) => {
                     console.warn('⚠️ [Bancho IRC] Đã ngắt kết nối khỏi Bancho IRC:', err?.message || 'Disconnected');

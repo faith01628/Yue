@@ -6,6 +6,7 @@ import { botConfig } from '../../config/botConfig.js';
 import { safeReadJSON, safeWriteJSON } from '../../utils/safeStorage.js';
 import { sendAdminDebugLog } from '../../domains/shared/logger/adminDebugLogger.js';
 import { findUserByAnyNameOrId } from './userService.js';
+import { t } from '../../locales/index.js';
 
 const LEADERBOARD_FILE = path.resolve('data/multi247DailyLeaderboard.json');
 const HISTORY_DIR = path.resolve('data/history');
@@ -924,15 +925,17 @@ export function getPlayerStandingsSummary(targetUserOrId) {
  * - Người lọt Top tháng trước: Tự động hiển thị huy chương và thứ hạng tháng trước (ví dụ: Tháng trước: #1 🥇 691pp).
  * - Người đổi tên: Tự động ghi chú tên cũ kèm theo (ví dụ: [link WhiteCat] (Tên cũ: oldName)).
  */
-export function formatPlayerStandingIRC(summary) {
+export function formatPlayerStandingIRC(summary, lang = 'en') {
     if (!summary || !summary.found) {
         const name = summary?.cleanName || 'Player';
-        return `YUE: ${name} | Chưa có dữ liệu thi đấu trong 30 ngày qua tại phòng 24/7. Hãy cùng chơi để ghi danh lên Bảng Xếp Hạng nhé!`;
+        return t('standing.noData', lang, name);
     }
 
     const { cleanName, userId, isRenamed, matchedOldName, todayRank, todayRecord, weeklyRank, weeklyRecord, monthlyRank, monthlyRecord, totalDaysPlayed, top1Count, top3Count, top5Count, top10Count, dailyHistory, bestRankEver, bestRecord, prevMonthStanding } = summary;
 
-    const renameTag = (isRenamed && matchedOldName) ? ` (Tên cũ: ${matchedOldName})` : '';
+    const renameTag = (isRenamed && matchedOldName)
+        ? t('standing.renameTag', lang, matchedOldName)
+        : '';
 
     const userProfileLink = userId 
         ? `[https://osu.ppy.sh/u/${userId} ${cleanName}]${renameTag}`
@@ -942,24 +945,28 @@ export function formatPlayerStandingIRC(summary) {
     let prevMonthPart = '';
     if (prevMonthStanding) {
         const medal = prevMonthStanding.rank === 1 ? '🥇 ' : (prevMonthStanding.rank === 2 ? '🥈 ' : (prevMonthStanding.rank === 3 ? '🥉 ' : ''));
-        prevMonthPart = `Tháng trước: #${prevMonthStanding.rank} ${medal}(${prevMonthStanding.pp}pp)`;
+        prevMonthPart = t('standing.prevMonth', lang, prevMonthStanding.rank, medal, prevMonthStanding.pp);
     }
 
     // Nếu người chơi chưa có lượt chơi nào trong tháng này nhưng có thành tích tháng trước:
     if (totalDaysPlayed === 0 && prevMonthStanding) {
-        return `YUE: ${userProfileLink} | Hôm nay: Chưa chơi | Tuần: -- | Tháng: -- | 🎖️ ${prevMonthPart} | Từng lọt Top tháng ${prevMonthStanding.month}!`;
+        return t('standing.onlyPrevMonth', lang, userProfileLink, prevMonthPart, prevMonthStanding.month);
     }
 
-    let todayPart = 'Hôm nay: Chưa chơi';
+    let todayPart = t('standing.todayNotPlayed', lang);
     if (todayRank && todayRecord) {
         const mods = Array.isArray(todayRecord.mods) && todayRecord.mods.length > 0 ? ` +${todayRecord.mods.join('')}` : (todayRecord.mod && todayRecord.mod !== 'NM' ? ` +${todayRecord.mod}` : '');
         const mapShort = todayRecord.mapTitle ? (todayRecord.mapTitle.length > 18 ? todayRecord.mapTitle.substring(0, 16) + '..' : todayRecord.mapTitle) : '';
         const mapInfo = mapShort ? ` - ${mapShort}${mods}` : '';
-        todayPart = `Hôm nay: #${todayRank} (${todayRecord.pp}pp${mapInfo})`;
+        todayPart = t('standing.todayRanked', lang, todayRank, todayRecord.pp, mapInfo);
     }
 
-    const weekPart = weeklyRank ? `Tuần: #${weeklyRank} (${weeklyRecord?.pp || 0}pp)` : 'Tuần: --';
-    const monthPart = monthlyRank ? `Tháng: #${monthlyRank} (${monthlyRecord?.pp || 0}pp)` : 'Tháng: --';
+    const weekPart = weeklyRank
+        ? t('standing.weekRanked', lang, weeklyRank, weeklyRecord?.pp || 0)
+        : t('standing.weekEmpty', lang);
+    const monthPart = monthlyRank
+        ? t('standing.monthRanked', lang, monthlyRank, monthlyRecord?.pp || 0)
+        : t('standing.monthEmpty', lang);
 
     let historyPart = '';
     const todayStr = getTodayDateString();
@@ -967,16 +974,16 @@ export function formatPlayerStandingIRC(summary) {
     if (totalDaysPlayed <= 2) {
         const pastDays = dailyHistory.filter(h => h.date !== todayStr);
         if (pastDays.length === 0) {
-            historyPart = `Mới tham gia hôm nay!`;
+            historyPart = t('standing.firstDay', lang);
         } else if (pastDays.length === 1) {
             const [y, m, d] = pastDays[0].date.split('-');
-            historyPart = `Từng đạt #${pastDays[0].rank} ngày ${d}/${m} (${pastDays[0].record.pp}pp)`;
+            historyPart = t('standing.pastSingle', lang, pastDays[0].rank, d, m, pastDays[0].record.pp);
         } else {
             const list = pastDays.map(h => {
                 const [y, m, d] = h.date.split('-');
                 return `#${h.rank} (${d}/${m})`;
             }).join(', ');
-            historyPart = `Từng đạt ${list}`;
+            historyPart = t('standing.pastList', lang, list);
         }
     } else {
         const parts = [];
@@ -990,9 +997,9 @@ export function formatPlayerStandingIRC(summary) {
         if (parts.length === 0 && top10Count > 0) parts.push(`${top10Count}x Top 10`);
 
         if (parts.length > 0) {
-            historyPart = `🏆 ${parts.join(', ')} trong ${totalDaysPlayed} ngày`;
+            historyPart = t('standing.medalsInDays', lang, parts.join(', '), totalDaysPlayed);
         } else {
-            historyPart = `Đã chơi ${totalDaysPlayed} ngày (Best: #${bestRankEver} ${bestRecord?.pp || 0}pp)`;
+            historyPart = t('standing.playedDaysBest', lang, totalDaysPlayed, bestRankEver, bestRecord?.pp || 0);
         }
     }
 

@@ -24,9 +24,10 @@ function formatShortTitle(title, maxLength = 35) {
     return title.substring(0, maxLength - 3).trim() + '...';
 }
 
-export async function handlePlayerCommands(channel, message, args, command) {
+export async function handlePlayerCommands(channel, message, args, command, options = {}) {
     const sender = message.user?.username || 'Player';
     const roomLang = await getRoomLanguage(channel);
+    const replyLang = options?.lang || roomLang || 'en';
 
     const lowerCmd = (command || '').toLowerCase();
 
@@ -36,7 +37,7 @@ export async function handlePlayerCommands(channel, message, args, command) {
         if (lbMsg) {
             return await channel.sendMessage(lbMsg);
         } else {
-            return await channel.sendMessage('YUE: Chưa có dữ liệu Bảng Xếp Hạng hôm nay tại phòng 24/7.');
+            return await channel.sendMessage(t('player.tmEmpty', replyLang));
         }
     }
 
@@ -60,7 +61,7 @@ export async function handlePlayerCommands(channel, message, args, command) {
         }
 
         const summary = getPlayerStandingsSummary(targetUser);
-        const replyMsg = formatPlayerStandingIRC(summary);
+        const replyMsg = formatPlayerStandingIRC(summary, replyLang);
         return await channel.sendMessage(replyMsg);
     }
 
@@ -78,7 +79,7 @@ export async function handlePlayerCommands(channel, message, args, command) {
             const data = await getUserRecentPlay(targetUser, mode);
 
             if (!data || !data.score) {
-                return await channel.sendMessage(t('rsNoScore', roomLang, targetUser));
+                return await channel.sendMessage(t('rsNoScore', replyLang, targetUser));
             }
 
             const score = data.score;
@@ -159,7 +160,7 @@ export async function handlePlayerCommands(channel, message, args, command) {
             return await channel.sendMessage(replyMsg);
         } catch (err) {
             console.error('Lỗi lấy .rs in-game:', err);
-            return await channel.sendMessage(t('rsError', roomLang, targetUser));
+            return await channel.sendMessage(t('rsError', replyLang, targetUser));
         }
     }
 }

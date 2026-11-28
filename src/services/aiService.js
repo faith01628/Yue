@@ -5,12 +5,8 @@ import { getLocalChannelHistory } from './chatHistoryManager.js';
 import { extractGifKeyframes, isAnimatedMedia } from './gifProcessor.js';
 import { memoryProvider } from '../brain/MemoryProvider.js';
 import { handleUserPreChatCheck, recordAiReplyState } from './challengeService.js';
-import { 
-    BASE_SYSTEM_PROMPT, 
-    VOICE_INSTRUCTION, 
-    getIngameInstruction, 
-    DISCORD_TEXT_INSTRUCTION 
-} from '../prompts/yuePrompts.js';
+import { buildSystemPrompt } from '../prompts/yuePrompts.js';
+import { formatLessonsForPrompt } from '../selfEvolution/evolutionStore.js';
 import 'dotenv/config';
 
 const apiKeys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') : (process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.split(',') : []);
@@ -24,17 +20,17 @@ function getNextAIInstance(isVoice = false, isIngame = false, extraContext = nul
     const key = apiKeys[currentKeyIndex];
     currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
 
-    let dynamicInstruction = "";
-
-    if (isVoice) {
-        dynamicInstruction = VOICE_INSTRUCTION;
-    } else if (isIngame) {
-        dynamicInstruction = getIngameInstruction(extraContext);
-    } else {
-        dynamicInstruction = DISCORD_TEXT_INSTRUCTION;
+    let effectiveContext = extraContext;
+    if (!isVoice && extraContext?.mode !== 'dev_architect' && !extraContext?.lessonsText) {
+        try {
+            const lessonsText = formatLessonsForPrompt(8);
+            if (lessonsText) {
+                effectiveContext = { ...(extraContext || {}), lessonsText };
+            }
+        } catch {}
     }
 
-    const fullPrompt = BASE_SYSTEM_PROMPT + dynamicInstruction;
+    const fullPrompt = buildSystemPrompt({ isVoice, isIngame, extraContext: effectiveContext });
     const ai = new GoogleGenerativeAI(key);
 
     const generationConfig = {};
@@ -230,6 +226,9 @@ export async function askYue(
 
         if (parsedRes) {
             if (isIngame) {
+                if (ingameContext?.mode === 'dev_architect') {
+                    return JSON.stringify(parsedRes);
+                }
                 return JSON.stringify({
                     reply: parsedRes.reply || "",
                     command: parsedRes.command || ""

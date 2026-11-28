@@ -46,7 +46,7 @@ function formatShortTitle(title, maxLength = 25) {
     return title.substring(0, maxLength - 3).trim() + '...';
 }
 
-function buildDownloadLinks(beatmapSetId, beatmapId) {
+export function buildDownloadLinks(beatmapSetId, beatmapId) {
     const direct = `osu://b/${beatmapId}`;
     const mirror = `https://osu.direct/d/${beatmapSetId}`;
     const mino = `https://catboy.best/d/${beatmapSetId}`;
@@ -71,7 +71,7 @@ function isCurrentHost(channel, username) {
     return false;
 }
 
-function parseRandomArgs(args) {
+export function parseRandomArgs(args) {
     let stars = null;
     let maxDuration = 900;
     let statuses = [];
@@ -110,7 +110,7 @@ function parseRandomArgs(args) {
     return { stars, maxDuration, statuses };
 }
 
-async function fetchRandomBeatmap({ stars, maxDuration, statuses }, roomStarMin = 0.0, roomStarMax = 10.0) {
+export async function fetchRandomBeatmap({ stars, maxDuration, statuses }, roomStarMin = 0.0, roomStarMax = 10.0) {
     try {
         const apiKey = process.env.OSU_API_KEY;
         let targetStar = stars;

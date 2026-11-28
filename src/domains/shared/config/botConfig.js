@@ -64,6 +64,34 @@ const defaultFullConfig = {
             matchEvaluator: true,
             refCommands: true
         }
+    },
+    osuPmAssistant: {
+        enabled: process.env.OSU_PM_ASSISTANT_ENABLED !== undefined ? process.env.OSU_PM_ASSISTANT_ENABLED === 'true' : true,
+        autoGreet: process.env.OSU_PM_AUTO_GREET !== undefined ? process.env.OSU_PM_AUTO_GREET === 'true' : true,
+        autoAiReply: process.env.OSU_PM_AUTO_AI_REPLY !== undefined ? process.env.OSU_PM_AUTO_AI_REPLY === 'true' : false,
+        greetCooldownMs: 6 * 60 * 60 * 1000, // 6 tiếng mới tự chào lại 1 lần/người
+        ownerMuteMs: 15 * 60 * 1000,         // Chủ nick tự nhắn tay -> bot tự im lặng auto-reply với người đó 15 phút
+        commandCooldownMs: 3000,             // Cooldown 3 giây/người để tránh rate limit Bancho IRC
+        contentFilter: true,                 // Bật lọc từ thô tục / công kích cá nhân
+        antiSpam: true,                      // Bật chống spam bảo vệ nick cá nhân
+        spamWindowMs: 15000,                 // Cửa sổ chống spam 15 giây
+        maxMessagesPerWindow: 4,             // Tối đa 4 tin/lệnh trong 15 giây mỗi người
+        spamMuteMs: 5 * 60 * 1000,           // Spam quá ngưỡng -> tự im lặng 5 phút
+        maxAbuseStrikes: 3,                  // Vi phạm ngôn từ 3 lần trong 10 phút -> tạm chặn 30 phút
+        abuseBlockMs: 30 * 60 * 1000,        // Thời gian tạm chặn khi cố tình xúc phạm
+        globalMaxOutbound: 6,                // Trần gửi toàn cục: tối đa 6 tin / 10 giây
+        globalWindowMs: 10000
+    },
+    selfEvolution: {
+        enabled: process.env.SELF_EVOLUTION_ENABLED !== undefined ? process.env.SELF_EVOLUTION_ENABLED === 'true' : true,
+        autoPropose: process.env.SELF_EVOLUTION_AUTO_PROPOSE !== undefined ? process.env.SELF_EVOLUTION_AUTO_PROPOSE === 'true' : true,
+        channelId: process.env.ADMIN_EVOLUTION_CHANNEL_ID || process.env.ADMIN_DEBUG_CHANNEL_ID || '',
+        githubRepo: process.env.GITHUB_REPO || 'faith01628/Yue',
+        githubBranch: process.env.GITHUB_BRANCH || 'dev',
+        minSignalCount: 3,                   // Tín hiệu phải lặp >= 3 lần mới tự động đề xuất
+        maxProposalsPerDay: 2,               // Tối đa 2 đề xuất tự động / ngày
+        minIntervalMs: 6 * 60 * 60 * 1000,   // Cách nhau ít nhất 6 tiếng giữa 2 đề xuất tự động
+        checkIntervalMs: 30 * 60 * 1000      // Kiểm tra định kỳ mỗi 30 phút
     }
 };
 

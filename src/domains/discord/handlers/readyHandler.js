@@ -24,6 +24,11 @@ export function registerReadyHandler(client) {
             startOwnerAssistantLoop(client);
         } catch (e) {}
 
+        try {
+            const { startSelfEvolutionLoop } = await import('../../../selfEvolution/index.js');
+            startSelfEvolutionLoop(client);
+        } catch (e) {}
+
         console.log(`\n==========================================================`);
         console.log(`🤖 Yue AI Master Control Panel • Chế độ: [${botConfig.mode.toUpperCase()}]`);
         console.log(`==========================================================`);
